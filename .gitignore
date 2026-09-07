@@ -23,5 +23,5 @@ yarn-error.log*
 # Docs (kept local, not pushed)
 *.md
 
-# Local Claude Code settings
-.claude/settings.local.json
+# Claude Code settings (local only, not pushed)
+.claude/
