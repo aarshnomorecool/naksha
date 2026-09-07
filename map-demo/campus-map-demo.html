@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NAKSHA — Campus Map Demo</title>
+
+<!-- Self-contained: CDN script tags only, no build step. Pinned versions for reproducibility. -->
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@8.9.33/dist.min.js"></script>
+<!-- Only needed once you flip on the Supabase Realtime block near the bottom of the script.
+     Uncomment when wiring to a live project — see "SUPABASE REALTIME SWAP" below. -->
+<!-- <script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script> -->
+
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1220; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #map { position: absolute; inset: 0; }
+
+  #badge {
+    position: absolute; top: 16px; left: 16px; z-index: 10;
+    background: rgba(220, 38, 38, 0.92); color: white; font-size: 12px; font-weight: 600;
+    letter-spacing: 0.03em; text-transform: uppercase; padding: 6px 12px; border-radius: 999px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  }
+
+  #title {
+    position: absolute; top: 16px; right: 16px; z-index: 10; text-align: right;
+    color: #e5e7eb;
+  }
+  #title .name { font-size: 16px; font-weight: 700; letter-spacing: 0.04em; }
+  #title .sub { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+
+  #legend {
+    position: absolute; bottom: 16px; left: 16px; z-index: 10;
+    background: rgba(17, 24, 39, 0.85); color: #e5e7eb; padding: 12px 14px; border-radius: 10px;
+    font-size: 12px; line-height: 1.7; box-shadow: 0 2px 8px rgba(0,0,0,0.35); min-width: 190px;
+  }
+  #legend h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #9ca3af; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: middle; }
+
+  /* deck.gl creates this element automatically for hover tooltips (via the
+     getTooltip prop on MapboxOverlay below) — just restyling it to match. */
+  .deck-tooltip {
+    background: rgba(17, 24, 39, 0.95) !important; color: #e5e7eb !important;
+    padding: 8px 10px !important; border-radius: 6px !important; font-size: 12px !important;
+    max-width: 220px; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+<div id="badge">Simulated feed for demo</div>
+<div id="title">
+  <div class="name">NAKSHA</div>
+  <div class="sub">Campus Map Prototype</div>
+</div>
+<div id="legend">
+  <h3>Classroom occupancy</h3>
+  <span class="swatch" style="background:#22c55e"></span>Low
+  <span class="swatch" style="background:#f59e0b"></span>Medium
+  <span class="swatch" style="background:#ef4444"></span>High
+  <br />height also scales with occupancy
+  <h3 style="margin-top:10px">Live layers</h3>
+  <span class="swatch" style="background:#3b82f6"></span>Buses
+  <span class="swatch" style="background:#22c55e"></span>Parking free
+  <span class="swatch" style="background:#ef4444"></span>Parking occupied
+</div>
+
+<script>
+// ============================================================================
+// CAMPUS GEOMETRY (placeholder)
+// Hand-authored rectangles approximating a small fictional campus, NOT traced
+// from satellite imagery. Replace by digitizing real building footprints in
+// QGIS or geojson.io and swapping BUILDINGS/CLASSROOMS below for the result.
+// Coordinates match supabase/seed.sql so the demo and the DB agree visually.
+// ============================================================================
+
+const CAMPUS_CENTER = [79.0882, 21.1458];
+
+const BUILDINGS = [
+  { id: 'main-academic', name: 'Main Academic Block',    height: 14, ring: [[79.08682,21.14646],[79.08718,21.14646],[79.08718,21.14674],[79.08682,21.14674]] },
+  { id: 'library',       name: 'Library',                height: 14, ring: [[79.08802,21.14646],[79.08838,21.14646],[79.08838,21.14674],[79.08802,21.14674]] },
+  { id: 'cs-block',      name: 'Computer Science Block', height: 14, ring: [[79.08922,21.14646],[79.08958,21.14646],[79.08958,21.14674],[79.08922,21.14674]] },
+  { id: 'admin',         name: 'Administration Block',   height: 14, ring: [[79.08682,21.14486],[79.08718,21.14486],[79.08718,21.14514],[79.08682,21.14514]] },
+  { id: 'cafeteria',     name: 'Cafeteria',               height: 14, ring: [[79.08802,21.14486],[79.08838,21.14486],[79.08838,21.14514],[79.08802,21.14514]] },
+  { id: 'hostel',        name: 'Hostel Block',            height: 14, ring: [[79.08922,21.14486],[79.08958,21.14486],[79.08958,21.14514],[79.08922,21.14514]] },
+];
+
+const CLASSROOMS = [
+  { id: 'r101', building: 'Main Academic Block', room: '101', capacity: 70, lng: 79.08688, lat: 21.14650 },
+  { id: 'r102', building: 'Main Academic Block', room: '102', capacity: 70, lng: 79.08694, lat: 21.14650 },
+  { id: 'r103', building: 'Main Academic Block', room: '103', capacity: 60, lng: 79.08700, lat: 21.14650 },
+  { id: 'r201', building: 'Main Academic Block', room: '201', capacity: 65, lng: 79.08690, lat: 21.14668 },
+  { id: 'r202', building: 'Main Academic Block', room: '202', capacity: 65, lng: 79.08706, lat: 21.14668 },
+  { id: 'cs101', building: 'Computer Science Block', room: 'CS-101', capacity: 40, lng: 79.08928, lat: 21.14650 },
+  { id: 'cs102', building: 'Computer Science Block', room: 'CS-102', capacity: 40, lng: 79.08934, lat: 21.14650 },
+  { id: 'cs201', building: 'Computer Science Block', room: 'CS-201', capacity: 45, lng: 79.08940, lat: 21.14650 },
+  { id: 'cslab1', building: 'Computer Science Block', room: 'CS-Lab-1', capacity: 35, lng: 79.08930, lat: 21.14668 },
+  { id: 'cslab2', building: 'Computer Science Block', room: 'CS-Lab-2', capacity: 35, lng: 79.08946, lat: 21.14668 },
+  { id: 'lib-reading', building: 'Library', room: 'Reading Hall', capacity: 100, lng: 79.08808, lat: 21.14656 },
+  { id: 'lib-ref', building: 'Library', room: 'Reference Section', capacity: 50, lng: 79.08820, lat: 21.14656 },
+  { id: 'lib-digital', building: 'Library', room: 'Digital Library', capacity: 40, lng: 79.08832, lat: 21.14656 },
+];
+
+// Loop routes buses cycle around the building cluster.
+const BUS_ROUTES = [
+  { id: 'bus-1', label: 'Bus 1', route_name: 'Route 1 - Hostel Loop', waypoints: [
+    [79.08750,21.14400],[79.08830,21.14395],[79.08910,21.14400],[79.08960,21.14440],
+    [79.08960,21.14500],[79.08910,21.14520],[79.08830,21.14520],[79.08750,21.14500],
+    [79.08700,21.14460],[79.08750,21.14400],
+  ]},
+  { id: 'bus-2', label: 'Bus 2', route_name: 'Route 2 - City Gate Shuttle', waypoints: [
+    [79.09000,21.14450],[79.09000,21.14380],[79.08900,21.14350],[79.08800,21.14350],
+    [79.08700,21.14380],[79.08660,21.14450],[79.08700,21.14520],[79.08800,21.14550],
+    [79.08900,21.14520],[79.09000,21.14450],
+  ]},
+  { id: 'bus-3', label: 'Bus 3', route_name: 'Route 3 - North Campus Express', waypoints: [
+    [79.08600,21.14550],[79.08650,21.14620],[79.08750,21.14680],[79.08850,21.14700],
+    [79.08950,21.14680],[79.09000,21.14620],[79.08950,21.14560],[79.08800,21.14530],
+    [79.08650,21.14530],[79.08600,21.14550],
+  ]},
+];
+
+const PARKING_SPOTS = [
+  { id: 'a1', lot_name: 'Lot A - Main Gate', lng: 79.08760, lat: 21.14430 },
+  { id: 'a2', lot_name: 'Lot A - Main Gate', lng: 79.08773, lat: 21.14430 },
+  { id: 'a3', lot_name: 'Lot A - Main Gate', lng: 79.08786, lat: 21.14430 },
+  { id: 'a4', lot_name: 'Lot A - Main Gate', lng: 79.08799, lat: 21.14430 },
+  { id: 'a5', lot_name: 'Lot A - Main Gate', lng: 79.08812, lat: 21.14430 },
+  { id: 'a6', lot_name: 'Lot A - Main Gate', lng: 79.08825, lat: 21.14430 },
+  { id: 'a7', lot_name: 'Lot A - Main Gate', lng: 79.08838, lat: 21.14430 },
+  { id: 'a8', lot_name: 'Lot A - Main Gate', lng: 79.08851, lat: 21.14430 },
+  { id: 'a9', lot_name: 'Lot A - Main Gate', lng: 79.08864, lat: 21.14430 },
+  { id: 'a10', lot_name: 'Lot A - Main Gate', lng: 79.08877, lat: 21.14430 },
+  { id: 'b1', lot_name: 'Lot B - Faculty', lng: 79.08655, lat: 21.14480 },
+  { id: 'b2', lot_name: 'Lot B - Faculty', lng: 79.08655, lat: 21.14490 },
+  { id: 'b3', lot_name: 'Lot B - Faculty', lng: 79.08655, lat: 21.14500 },
+  { id: 'b4', lot_name: 'Lot B - Faculty', lng: 79.08665, lat: 21.14480 },
+  { id: 'b5', lot_name: 'Lot B - Faculty', lng: 79.08665, lat: 21.14490 },
+  { id: 'b6', lot_name: 'Lot B - Faculty', lng: 79.08665, lat: 21.14500 },
+];
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+function squareRing(lng, lat, halfSizeDeg, z) {
+  return [
+    [lng - halfSizeDeg, lat - halfSizeDeg, z],
+    [lng + halfSizeDeg, lat - halfSizeDeg, z],
+    [lng + halfSizeDeg, lat + halfSizeDeg, z],
+    [lng - halfSizeDeg, lat + halfSizeDeg, z],
+  ];
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function lerpColor(a, b, t) {
+  return [Math.round(lerp(a[0], b[0], t)), Math.round(lerp(a[1], b[1], t)), Math.round(lerp(a[2], b[2], t))];
+}
+
+// green (low) -> amber (mid) -> red (high)
+function occupancyColor(pct) {
+  const GREEN = [34, 197, 94], AMBER = [245, 158, 11], RED = [239, 68, 68];
+  if (pct <= 50) return lerpColor(GREEN, AMBER, pct / 50);
+  return lerpColor(AMBER, RED, (pct - 50) / 50);
+}
+
+// ============================================================================
+// STATE — the single source of truth that gets rendered every frame.
+// Right now the SIMULATION block below is what mutates this. Once Supabase is
+// live, the SUPABASE REALTIME SWAP block at the bottom populates and mutates
+// this exact same shape instead — nothing downstream of `state` needs to change.
+// ============================================================================
+
+const state = {
+  classrooms: CLASSROOMS.map(c => ({ ...c, occupancy_pct: Math.round(20 + Math.random() * 60) })),
+  buses: BUS_ROUTES.map(r => ({ ...r, segment: 0, progress: Math.random(), position: r.waypoints[0] })),
+  parking: PARKING_SPOTS.map(p => ({ ...p, occupied: Math.random() < 0.55 })),
+};
+
+// ============================================================================
+// SIMULATION
+// Drives bus movement along their loop routes and randomizes occupancy/parking.
+// This whole block is a stand-in for real data and is exactly what gets
+// deleted once the Realtime subscriptions further down are switched on.
+// ============================================================================
+
+const SECONDS_PER_SEGMENT = 4;
+
+function stepBuses(dtSeconds) {
+  state.buses.forEach(bus => {
+    bus.progress += dtSeconds / SECONDS_PER_SEGMENT;
+    while (bus.progress >= 1) {
+      bus.progress -= 1;
+      bus.segment = (bus.segment + 1) % (bus.waypoints.length - 1);
+    }
+    const from = bus.waypoints[bus.segment];
+    const to = bus.waypoints[bus.segment + 1];
+    bus.position = [lerp(from[0], to[0], bus.progress), lerp(from[1], to[1], bus.progress)];
+  });
+}
+
+function jitterOccupancy() {
+  state.classrooms.forEach(c => {
+    const walk = (Math.random() - 0.5) * 25;
+    c.occupancy_pct = Math.min(100, Math.max(0, Math.round(c.occupancy_pct + walk)));
+  });
+}
+
+function jitterParking() {
+  state.parking.forEach(p => {
+    if (Math.random() < 0.12) p.occupied = !p.occupied;
+  });
+}
+
+// ============================================================================
+// DECK.GL LAYERS
+// ============================================================================
+
+function buildLayers() {
+  // deck.gl only recomputes GPU attributes when the `data` array reference
+  // changes or an updateTrigger value changes. state.classrooms/buses/parking
+  // are mutated in place (same array reference every call), so every
+  // per-frame-changing accessor below needs an updateTrigger — otherwise the
+  // layer renders its first frame and then looks frozen even though the
+  // simulation loop is still running underneath.
+  const now = performance.now();
+
+  const buildingsLayer = new deck.PolygonLayer({
+    id: 'buildings',
+    data: BUILDINGS,
+    getPolygon: d => d.ring,
+    extruded: true,
+    getElevation: d => d.height,
+    getFillColor: [71, 85, 105, 200],
+    getLineColor: [148, 163, 184, 255],
+    lineWidthMinPixels: 1,
+    pickable: true,
+  });
+
+  const classroomsLayer = new deck.PolygonLayer({
+    id: 'classrooms',
+    data: state.classrooms,
+    // base ring sits at z = building roof height (14) so occupancy bars read
+    // as spikes rising OUT of the building roof, not competing with its walls
+    getPolygon: d => squareRing(d.lng, d.lat, 0.00003, 14),
+    extruded: true,
+    getElevation: d => 1 + (d.occupancy_pct / 100) * 20,
+    getFillColor: d => [...occupancyColor(d.occupancy_pct), 230],
+    pickable: true,
+    updateTriggers: { getElevation: now, getFillColor: now },
+  });
+
+  const busesLayer = new deck.ScatterplotLayer({
+    id: 'buses',
+    data: state.buses,
+    getPosition: d => d.position,
+    getRadius: 6,
+    radiusUnits: 'pixels',
+    getFillColor: [59, 130, 246, 255],
+    getLineColor: [255, 255, 255, 255],
+    lineWidthMinPixels: 1.5,
+    stroked: true,
+    pickable: true,
+    updateTriggers: { getPosition: now },
+  });
+
+  const parkingLayer = new deck.ScatterplotLayer({
+    id: 'parking',
+    data: state.parking,
+    getPosition: d => [d.lng, d.lat],
+    getRadius: 3.5,
+    radiusUnits: 'pixels',
+    getFillColor: d => d.occupied ? [239, 68, 68, 255] : [34, 197, 94, 255],
+    pickable: true,
+    updateTriggers: { getFillColor: now },
+  });
+
+  return [buildingsLayer, classroomsLayer, parkingLayer, busesLayer];
+}
+
+function renderLayers() {
+  overlay.setProps({ layers: buildLayers() });
+}
+
+// ============================================================================
+// MAP INIT
+// No tile server: the base style is a single solid-color background layer,
+// so the demo has zero external dependency that can fail mid-presentation.
+// ============================================================================
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {},
+    layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#0b1220' } }],
+  },
+  center: CAMPUS_CENTER,
+  zoom: 17.6,
+  pitch: 55,
+  bearing: -20,
+  antialias: true,
+});
+
+const overlay = new deck.MapboxOverlay({
+  interleaved: true,
+  layers: [],
+  getTooltip: ({ object, layer }) => {
+    if (!object || !layer) return null;
+    if (layer.id === 'classrooms') {
+      return { html: `<b>${object.building} — ${object.room}</b><br/>Occupancy: ${object.occupancy_pct}% of ${object.capacity}` };
+    }
+    if (layer.id === 'buses') {
+      return { html: `<b>${object.label}</b><br/>${object.route_name}` };
+    }
+    if (layer.id === 'parking') {
+      return { html: `<b>${object.lot_name}</b><br/>${object.occupied ? 'Occupied' : 'Free'}` };
+    }
+    if (layer.id === 'buildings') {
+      return { html: `<b>${object.name}</b>` };
+    }
+    return null;
+  },
+});
+
+map.addControl(overlay);
+map.on('load', renderLayers);
+
+// Animation loop for smooth bus movement.
+let lastFrame = performance.now();
+function animationTick(now) {
+  const dt = (now - lastFrame) / 1000;
+  lastFrame = now;
+  stepBuses(dt);
+  renderLayers();
+  requestAnimationFrame(animationTick);
+}
+requestAnimationFrame(animationTick);
+
+// Slower-ticking simulated changes.
+setInterval(jitterOccupancy, 4000);
+setInterval(jitterParking, 3500);
+
+/* ============================================================================
+SUPABASE REALTIME SWAP
+Copy-paste starting point for wiring this file (or the ported React version in
+/frontend) to a live Supabase project instead of the simulation above. Steps:
+
+1. Uncomment the supabase-js <script> tag in <head>.
+2. Uncomment this whole block and delete (or just stop calling) stepBuses(),
+   jitterOccupancy(), jitterParking(), and the two setInterval calls above —
+   state is now driven by the database, not the simulation.
+3. Fill in your project URL/anon key (from the Supabase dashboard — never
+   commit real values, use env vars in the React version's .env instead).
+
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+function geomToLngLat(geom) {
+  // Supabase/PostGIS returns geometry as GeoJSON when selected with
+  // `.select('...,location::json')` — adjust to however you cast it.
+  return geom.coordinates;
+}
+
+async function loadInitialState() {
+  const { data: classrooms } = await supabase
+    .from('classrooms')
+    .select('id, room_number, capacity, current_occupancy, buildings(name)');
+  state.classrooms = classrooms.map(c => ({
+    id: c.id, building: c.buildings.name, room: c.room_number, capacity: c.capacity,
+    occupancy_pct: Math.round(100 * c.current_occupancy / c.capacity),
+    lng: c.lng, lat: c.lat, // pull from a PostGIS-to-lng/lat cast, e.g. ST_X/ST_Y in the query
+  }));
+
+  const { data: buses } = await supabase.from('current_bus_positions').select('*');
+  state.buses = buses.map(b => ({ id: b.bus_id, label: b.label, route_name: b.route_name, position: geomToLngLat(b.position) }));
+
+  const { data: parking } = await supabase.from('parking_spots').select('*');
+  state.parking = parking.map(p => ({ id: p.id, lot_name: p.lot_name, occupied: p.occupied > 0, lng: p.lng, lat: p.lat }));
+
+  renderLayers();
+}
+loadInitialState();
+
+supabase.channel('classrooms-changes')
+  .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'classrooms' }, ({ new: row }) => {
+    const c = state.classrooms.find(x => x.id === row.id);
+    if (c) { c.occupancy_pct = Math.round(100 * row.current_occupancy / c.capacity); renderLayers(); }
+  })
+  .subscribe();
+
+supabase.channel('bus-positions-changes')
+  .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bus_positions' }, ({ new: row }) => {
+    const b = state.buses.find(x => x.id === row.bus_id);
+    if (b) { b.position = geomToLngLat(row.position); renderLayers(); }
+  })
+  .subscribe();
+
+supabase.channel('parking-changes')
+  .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'parking_spots' }, ({ new: row }) => {
+    const p = state.parking.find(x => x.id === row.id);
+    if (p) { p.occupied = row.occupied > 0; renderLayers(); }
+  })
+  .subscribe();
+============================================================================ */
+</script>
+</body>
+</html>
