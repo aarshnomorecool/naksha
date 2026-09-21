@@ -6,7 +6,7 @@ import { AuthProvider } from '@/context/AuthContext'
 import { CheckInPage } from '@/pages/CheckInPage'
 import { ConsentPage } from '@/pages/ConsentPage'
 import { DashboardListPage } from '@/pages/DashboardListPage'
-import { DriverPage } from '@/pages/DriverPage'
+import { BuildingDetailPage } from '@/pages/BuildingDetailPage'
 import { HomePage } from '@/pages/HomePage'
 import { LoginPage } from '@/pages/LoginPage'
 import { StudentDetailPage } from '@/pages/StudentDetailPage'
@@ -21,6 +21,7 @@ function App() {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/map" element={<MapView />} />
+              <Route path="/map/building/:buildingId" element={<BuildingDetailPage />} />
               <Route path="/login" element={<LoginPage />} />
               <Route
                 path="/checkin"
@@ -30,7 +31,6 @@ function App() {
                   </RequireAuth>
                 }
               />
-              <Route path="/driver" element={<DriverPage />} />
               <Route path="/consent" element={<ConsentPage />} />
               <Route
                 path="/dashboard"

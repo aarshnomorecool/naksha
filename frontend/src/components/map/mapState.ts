@@ -4,26 +4,17 @@
 // shape once a Supabase project is wired up. Nothing downstream needs to
 // change when that swap happens.
 
-import { BUS_ROUTES, CLASSROOMS, PARKING_SPOTS, type BusRoute } from './campusData'
+import { CLASSROOMS, PARKING_SPOTS } from './campusData'
 
 export interface ClassroomState {
   id: string
   building: string
   room: string
+  floor: number
   capacity: number
   lng: number
   lat: number
-  occupancy_pct: number
-}
-
-export interface BusState {
-  id: string
-  label: string
-  route_name: string
-  waypoints: [number, number][]
-  segment: number
-  progress: number
-  position: [number, number]
+  present_count: number
 }
 
 export interface ParkingState {
@@ -36,46 +27,24 @@ export interface ParkingState {
 
 export interface MapState {
   classrooms: ClassroomState[]
-  buses: BusState[]
   parking: ParkingState[]
 }
 
 export function createSimulatedState(): MapState {
   return {
-    classrooms: CLASSROOMS.map((c) => ({ ...c, occupancy_pct: Math.round(20 + Math.random() * 60) })),
-    buses: BUS_ROUTES.map((r: BusRoute) => ({
-      ...r,
-      segment: 0,
-      progress: Math.random(),
-      position: r.waypoints[0],
-    })),
+    classrooms: CLASSROOMS.map((c) => ({ ...c, present_count: Math.round(c.capacity * (0.25 + Math.random() * 0.55)) })),
     parking: PARKING_SPOTS.map((p) => ({ ...p, occupied: Math.random() < 0.55 })),
   }
 }
-
-const SECONDS_PER_SEGMENT = 4
 
 function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t
 }
 
-export function stepBuses(state: MapState, dtSeconds: number) {
-  state.buses.forEach((bus) => {
-    bus.progress += dtSeconds / SECONDS_PER_SEGMENT
-    while (bus.progress >= 1) {
-      bus.progress -= 1
-      bus.segment = (bus.segment + 1) % (bus.waypoints.length - 1)
-    }
-    const from = bus.waypoints[bus.segment]
-    const to = bus.waypoints[bus.segment + 1]
-    bus.position = [lerp(from[0], to[0], bus.progress), lerp(from[1], to[1], bus.progress)]
-  })
-}
-
-export function jitterOccupancy(state: MapState) {
+export function jitterClassroomPresence(state: MapState) {
   state.classrooms.forEach((c) => {
-    const walk = (Math.random() - 0.5) * 25
-    c.occupancy_pct = Math.min(100, Math.max(0, Math.round(c.occupancy_pct + walk)))
+    const walk = Math.round((Math.random() - 0.5) * 12)
+    c.present_count = Math.min(c.capacity, Math.max(0, c.present_count + walk))
   })
 }
 

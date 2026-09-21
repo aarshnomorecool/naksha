@@ -1,65 +1,76 @@
-import { PolygonLayer, ScatterplotLayer } from '@deck.gl/layers'
-import { BUILDINGS } from './campusData'
-import { occupancyColor, squareRing, type MapState } from './mapState'
+import { PolygonLayer, TextLayer } from '@deck.gl/layers'
+import { BUILDINGS, type Building } from './campusData'
+import type { MapState } from './mapState'
 
-export function buildLayers(state: MapState) {
-  // deck.gl only recomputes GPU attributes when the `data` array reference
-  // changes or an updateTrigger value changes — since state.classrooms/
-  // buses/parking are mutated in place (same array reference every call),
-  // every per-frame-changing accessor below needs an updateTrigger, or the
-  // layer will render its first frame and then appear visually frozen even
-  // though the simulation is still running underneath.
-  const now = performance.now()
+const PARKING_RING: [number, number][] = [
+  [79.08776, 21.14568],
+  [79.08835, 21.14568],
+  [79.08835, 21.1459],
+  [79.08776, 21.1459],
+]
 
-  const buildingsLayer = new PolygonLayer({
+function ringCenter(ring: [number, number][]) {
+  const [lng, lat] = ring.reduce<[number, number]>((sum, point) => [sum[0] + point[0], sum[1] + point[1]], [0, 0])
+  return [lng / ring.length, lat / ring.length] as [number, number]
+}
+
+export function buildLayers(state: MapState, onBuildingClick: (building: Building) => void) {
+  const buildingsLayer = new PolygonLayer<Building>({
     id: 'buildings',
     data: BUILDINGS,
-    getPolygon: (d) => d.ring,
+    getPolygon: (building) => building.ring,
     extruded: true,
-    getElevation: (d) => d.height,
-    getFillColor: [71, 85, 105, 200],
-    getLineColor: [148, 163, 184, 255],
-    lineWidthMinPixels: 1,
+    getElevation: (building) => building.height,
+    getFillColor: [255, 255, 255, 235],
+    getLineColor: [15, 23, 42, 255],
+    lineWidthMinPixels: 2,
     pickable: true,
+    onClick: ({ object }) => {
+      if (object) onBuildingClick(object)
+    },
   })
 
-  const classroomsLayer = new PolygonLayer({
-    id: 'classrooms',
-    data: state.classrooms,
-    // base ring sits at z = building roof height (14) so occupancy bars read
-    // as spikes rising out of the roof, not competing with the building walls
-    getPolygon: (d) => squareRing(d.lng, d.lat, 0.00003, 14),
-    extruded: true,
-    getElevation: (d) => 1 + (d.occupancy_pct / 100) * 20,
-    getFillColor: (d) => [...occupancyColor(d.occupancy_pct), 230],
-    pickable: true,
-    updateTriggers: { getElevation: now, getFillColor: now },
+  const buildingLabels = new TextLayer<Building>({
+    id: 'building-labels',
+    data: BUILDINGS,
+    getPosition: (building) => ringCenter(building.ring),
+    getText: (building) => building.shortLabel,
+    getColor: [15, 23, 42, 255],
+    getSize: 18,
+    sizeUnits: 'pixels',
+    getTextAnchor: 'middle',
+    getAlignmentBaseline: 'center',
+    fontFamily: 'Space Grotesk Variable, sans-serif',
+    fontWeight: 700,
+    billboard: true,
+    pickable: false,
   })
 
-  const busesLayer = new ScatterplotLayer({
-    id: 'buses',
-    data: state.buses,
-    getPosition: (d) => d.position,
-    getRadius: 6,
-    radiusUnits: 'pixels',
-    getFillColor: [59, 130, 246, 255],
-    getLineColor: [255, 255, 255, 255],
-    lineWidthMinPixels: 1.5,
-    stroked: true,
-    pickable: true,
-    updateTriggers: { getPosition: now },
-  })
-
-  const parkingLayer = new ScatterplotLayer({
+  const parkingLayer = new PolygonLayer({
     id: 'parking',
-    data: state.parking,
-    getPosition: (d) => [d.lng, d.lat],
-    getRadius: 3.5,
-    radiusUnits: 'pixels',
-    getFillColor: (d) => (d.occupied ? [239, 68, 68, 255] : [34, 197, 94, 255]),
+    data: [{ ring: PARKING_RING, occupied: state.parking.filter((spot) => spot.occupied).length, total: state.parking.length }],
+    getPolygon: (parking) => parking.ring,
+    getFillColor: [254, 243, 199, 235],
+    getLineColor: [15, 23, 42, 255],
+    lineWidthMinPixels: 2,
     pickable: true,
-    updateTriggers: { getFillColor: now },
   })
 
-  return [buildingsLayer, classroomsLayer, parkingLayer, busesLayer]
+  const parkingLabel = new TextLayer({
+    id: 'parking-label',
+    data: [{ position: ringCenter(PARKING_RING), label: 'PARKING' }],
+    getPosition: (parking) => parking.position,
+    getText: (parking) => parking.label,
+    getColor: [15, 23, 42, 255],
+    getSize: 13,
+    sizeUnits: 'pixels',
+    getTextAnchor: 'middle',
+    getAlignmentBaseline: 'center',
+    fontFamily: 'Space Grotesk Variable, sans-serif',
+    fontWeight: 700,
+    billboard: true,
+    pickable: false,
+  })
+
+  return [buildingsLayer, buildingLabels, parkingLayer, parkingLabel]
 }

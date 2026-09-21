@@ -5,11 +5,9 @@ import { useAuth } from '@/context/AuthContext'
 import { cn } from '@/lib/utils'
 
 const links = [
-  { to: '/map', label: 'Map' },
-  { to: '/checkin', label: 'Check-in' },
-  { to: '/driver', label: 'Driver' },
-  { to: '/consent', label: 'Consent' },
-  { to: '/dashboard', label: 'Dashboard' },
+  { to: '/checkin', label: 'Student' },
+  { to: '/dashboard', label: 'Mentor' },
+  { to: '/map', label: 'College live map' },
 ]
 
 export function AppNav() {

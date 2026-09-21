@@ -1,4 +1,4 @@
-import { Bus, ScanLine, ShieldCheck, SquareUser, Waypoints } from 'lucide-react'
+import { ScanLine, SquareUser, Waypoints } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { BrandMark } from '@/components/BrandMark'
 import { CampusSketch } from '@/components/CampusSketch'
@@ -9,7 +9,7 @@ const surfaces = [
     to: '/map',
     icon: Waypoints,
     title: 'Live campus map',
-    description: 'Buildings, buses, and parking, updated as data comes in.',
+    description: 'Select a building to view its floors, classrooms, and students present.',
   },
   {
     to: '/dashboard',
@@ -22,18 +22,6 @@ const surfaces = [
     icon: ScanLine,
     title: 'Check-in kiosk',
     description: "Scan a student's badge at the classroom door to record attendance.",
-  },
-  {
-    to: '/driver',
-    icon: Bus,
-    title: 'Driver broadcast',
-    description: "A driver's phone reports bus position while a route is running.",
-  },
-  {
-    to: '/consent',
-    icon: ShieldCheck,
-    title: 'Guardian consent',
-    description: "Parents and guardians record what they're agreeing to share, and why.",
   },
 ]
 
@@ -67,6 +55,15 @@ export function HomePage() {
         </div>
       </div>
 
+      <div className="mx-auto mt-20 max-w-xl">
+        <p className="mb-3 text-center text-xs font-semibold tracking-[0.15em] text-muted-foreground uppercase">Choose a workspace</p>
+        <div className="flex flex-col gap-3">
+          <WorkspaceTab to="/checkin" label="Student" />
+          <WorkspaceTab to="/dashboard" label="Mentor" />
+          <WorkspaceTab to="/map" label="College Live Map" />
+        </div>
+      </div>
+
       <div className="mt-20">
         <p className="max-w-[60ch] text-sm text-muted-foreground">
           Everything below reads from the same student and campus records — there's no
@@ -93,5 +90,16 @@ export function HomePage() {
         </div>
       </div>
     </div>
+  )
+}
+
+function WorkspaceTab({ to, label }: { to: string; label: string }) {
+  return (
+    <Link
+      to={to}
+      className="rounded-md border-2 border-foreground bg-card px-5 py-3 text-center font-display text-lg font-semibold tracking-wide uppercase transition-colors hover:bg-accent"
+    >
+      {label}
+    </Link>
   )
 }
