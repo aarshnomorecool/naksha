@@ -1,3 +1,6 @@
+// Preserved while the bus feature is hidden: this page is intentionally NOT
+// routed in App.tsx for now. Re-add `<Route path="/driver" ... />` to bring
+// it back — see busBackup.ts for the full bus restoration checklist.
 import { useEffect, useRef, useState } from 'react'
 import { CAMPUS_CENTER } from '@/components/map/campusData'
 import { Button } from '@/components/ui/button'

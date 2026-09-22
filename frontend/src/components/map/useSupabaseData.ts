@@ -26,14 +26,23 @@ export function subscribeSupabaseData(state: MapState, onChange: () => void): ()
   let cancelled = false
 
   async function loadInitial() {
-    const [classrooms, parking] = await Promise.all([
+    const today = new Date().toISOString().slice(0, 10)
+    const [classrooms, parking, todayRows] = await Promise.all([
       client
         .from('classrooms')
         .select('id, room_number, floor, capacity, current_occupancy, lng, lat, buildings(name)')
         .returns<ClassroomRow[]>(),
       client.from('parking_spots').select('id, lot_name, lng, lat, occupied').returns<ParkingRow[]>(),
+      // Today's real per-room counts — current_occupancy goes stale overnight
+      // (the trigger only runs on writes), so prefer the tally when available.
+      client.from('attendance').select('classroom_id').eq('session_date', today),
     ])
     if (cancelled) return
+
+    const todayByRoom = new Map<string, number>()
+    for (const row of (todayRows.data as { classroom_id: string }[] | null) ?? []) {
+      todayByRoom.set(row.classroom_id, (todayByRoom.get(row.classroom_id) ?? 0) + 1)
+    }
 
     if (classrooms.data) {
       state.classrooms = classrooms.data.map((classroom) => ({
@@ -44,7 +53,7 @@ export function subscribeSupabaseData(state: MapState, onChange: () => void): ()
         capacity: classroom.capacity,
         lng: classroom.lng,
         lat: classroom.lat,
-        present_count: classroom.current_occupancy,
+        present_count: todayByRoom.get(classroom.id) ?? classroom.current_occupancy,
       }))
     }
     if (parking.data) {

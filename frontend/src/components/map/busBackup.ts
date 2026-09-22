@@ -1,5 +1,17 @@
-// Bus tracking is deliberately inactive for the current campus-map scope.
-// This module retains the route simulation needed to restore it later.
+// Bus tracking is deliberately HIDDEN for the current campus-map scope —
+// nothing in the UI imports this module right now. It is preserved (not
+// deleted) so the feature can be restored without re-creating anything:
+//
+// To restore:
+//   1. layers.ts — append a ScatterplotLayer fed by live bus positions
+//      (working reference: the `busesLayer` in map-demo/campus-map-demo.html).
+//   2. mapState.ts — add a `buses` array to MapState + a stepper that moves
+//      each bus along `BUS_ROUTES` below (reference: `stepBuses` in the demo).
+//   3. useSupabaseData.ts — subscribe to `bus_positions` (table, RLS policy,
+//      and seed rows already exist in supabase/) and write into that array.
+//   4. App.tsx — re-add the `/driver` route for DriverPage.tsx (file kept,
+//      currently unrouted). MOCK_BUSES in lib/mockData.ts is also untouched.
+// This module retains the route geometry needed for all of the above.
 export interface BusRoute {
   id: string
   label: string

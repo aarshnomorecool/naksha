@@ -9,6 +9,7 @@ import { DashboardListPage } from '@/pages/DashboardListPage'
 import { BuildingDetailPage } from '@/pages/BuildingDetailPage'
 import { HomePage } from '@/pages/HomePage'
 import { LoginPage } from '@/pages/LoginPage'
+import { ScanPage } from '@/pages/ScanPage'
 import { StudentDetailPage } from '@/pages/StudentDetailPage'
 
 function App() {
@@ -23,6 +24,8 @@ function App() {
               <Route path="/map" element={<MapView />} />
               <Route path="/map/building/:buildingId" element={<BuildingDetailPage />} />
               <Route path="/login" element={<LoginPage />} />
+              {/* Public: students land here from a classroom QR, no login. */}
+              <Route path="/scan" element={<ScanPage />} />
               <Route
                 path="/checkin"
                 element={

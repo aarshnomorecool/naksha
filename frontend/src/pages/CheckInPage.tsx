@@ -1,9 +1,11 @@
 import { Html5Qrcode } from 'html5-qrcode'
 import { useEffect, useRef, useState } from 'react'
+import { QRCodeSVG } from 'qrcode.react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { checkInByRollNumber, fetchClassrooms, type CheckedInStudent, type ClassroomOption } from '@/lib/checkIn'
+import { buildCheckInUrl } from '@/lib/selfCheckIn'
 
 interface LogEntry {
   rollNumber: string
@@ -139,6 +141,33 @@ export function CheckInPage() {
           ))}
         </select>
       </div>
+
+      {classroomId && (
+        <div className="mt-6 flex flex-col gap-4 rounded-md border border-border bg-card p-4 sm:flex-row sm:items-center">
+          <div className="shrink-0 rounded-md border border-border bg-white p-2">
+            <QRCodeSVG value={buildCheckInUrl(classroomId)} size={140} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold">Classroom QR code</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Display this on the projector or print it for the door. Students scan it with their
+              phone camera — it opens a check-in form for this classroom, and their attendance
+              appears on the map and mentor dashboard automatically.
+            </p>
+            <p className="mt-2 truncate font-mono text-[11px] text-muted-foreground">
+              {buildCheckInUrl(classroomId)}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              onClick={() => void navigator.clipboard.writeText(buildCheckInUrl(classroomId))}
+            >
+              Copy check-in link
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="mt-6 grid gap-6 md:grid-cols-2">
         <div>

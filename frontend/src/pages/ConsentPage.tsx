@@ -2,7 +2,18 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { MOCK_STUDENTS, type ConsentRecord } from '@/lib/mockData'
+
+// No consent table in Supabase yet, so records stay in this tab (see banner
+// below). The student is free-text roll input — never a made-up dropdown — so
+// nothing here can be mistaken for real data.
+interface ConsentRecord {
+  id: string
+  guardianName: string
+  relationship: string
+  studentRollNumber: string
+  purposes: string[]
+  submittedAt: string
+}
 
 const PURPOSES = [
   {
@@ -25,7 +36,7 @@ const PURPOSES = [
 export function ConsentPage() {
   const [guardianName, setGuardianName] = useState('')
   const [relationship, setRelationship] = useState('Parent')
-  const [rollNumber, setRollNumber] = useState(MOCK_STUDENTS[0].rollNumber)
+  const [rollNumber, setRollNumber] = useState('')
   const [purposes, setPurposes] = useState<string[]>([])
   const [records, setRecords] = useState<ConsentRecord[]>([])
   const [submitted, setSubmitted] = useState(false)
@@ -36,7 +47,7 @@ export function ConsentPage() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!guardianName.trim() || purposes.length === 0) return
+    if (!guardianName.trim() || !rollNumber.trim() || purposes.length === 0) return
     const record: ConsentRecord = {
       id: crypto.randomUUID(),
       guardianName: guardianName.trim(),
@@ -90,19 +101,17 @@ export function ConsentPage() {
         </div>
 
         <div>
-          <Label htmlFor="student">Student</Label>
-          <select
+          <Label htmlFor="student">Student roll number</Label>
+          <Input
             id="student"
             value={rollNumber}
             onChange={(e) => setRollNumber(e.target.value)}
-            className="mt-1.5 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-          >
-            {MOCK_STUDENTS.map((s) => (
-              <option key={s.rollNumber} value={s.rollNumber}>
-                {s.fullName} — {s.rollNumber}
-              </option>
-            ))}
-          </select>
+            placeholder="e.g. NKS25001"
+            autoComplete="off"
+            autoCapitalize="characters"
+            className="mt-1.5"
+            required
+          />
         </div>
 
         <fieldset>
@@ -125,7 +134,7 @@ export function ConsentPage() {
           </div>
         </fieldset>
 
-        <Button type="submit" disabled={!guardianName.trim() || purposes.length === 0}>
+        <Button type="submit" disabled={!guardianName.trim() || !rollNumber.trim() || purposes.length === 0}>
           Record consent
         </Button>
         {submitted && <p className="text-sm text-emerald-600 dark:text-emerald-400">Consent recorded.</p>}
@@ -135,23 +144,20 @@ export function ConsentPage() {
         <div className="mt-10">
           <h2 className="text-sm font-medium text-muted-foreground">Recorded this session</h2>
           <ul className="mt-2 flex flex-col gap-2">
-            {records.map((r) => {
-              const student = MOCK_STUDENTS.find((s) => s.rollNumber === r.studentRollNumber)
-              return (
-                <li key={r.id} className="rounded-md border border-border bg-card px-3 py-2 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">
-                      {r.guardianName} <span className="font-normal text-muted-foreground">({r.relationship})</span>
-                    </span>
-                    <span className="text-xs text-muted-foreground">{r.submittedAt}</span>
-                  </div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">
-                    For {student?.fullName ?? r.studentRollNumber} · {r.purposes.length} purpose
-                    {r.purposes.length === 1 ? '' : 's'} agreed
-                  </div>
-                </li>
-              )
-            })}
+            {records.map((r) => (
+              <li key={r.id} className="rounded-md border border-border bg-card px-3 py-2 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">
+                    {r.guardianName} <span className="font-normal text-muted-foreground">({r.relationship})</span>
+                  </span>
+                  <span className="text-xs text-muted-foreground">{r.submittedAt}</span>
+                </div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  For {r.studentRollNumber} · {r.purposes.length} purpose
+                  {r.purposes.length === 1 ? '' : 's'} agreed
+                </div>
+              </li>
+            ))}
           </ul>
         </div>
       )}

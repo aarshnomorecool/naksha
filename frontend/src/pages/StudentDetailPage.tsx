@@ -25,6 +25,7 @@ export function StudentDetailPage() {
 
   const { student, risk, checkIns, attendanceTrend } = detail
   const meta = risk ? RISK_BAND_META[risk.risk_band] : null
+  const livePct = Math.round((100 * attendanceTrend.filter((d) => d.present).length) / Math.max(1, attendanceTrend.length))
   const chartData = attendanceTrend.map((d) => ({
     date: d.date.slice(5),
     present: d.present ? 1 : 0,
@@ -42,6 +43,10 @@ export function StudentDetailPage() {
           <p className="text-sm text-muted-foreground">
             {student.roll_number} · {student.program} · Year {student.year}
             {student.section ? ` · Section ${student.section}` : ''}
+          </p>
+          <p className="mt-1 text-sm">
+            <span className="font-semibold tabular-nums">{livePct}%</span>{' '}
+            <span className="text-muted-foreground">present over the last {attendanceTrend.length} days (live)</span>
           </p>
         </div>
         {meta && <Badge className={meta.badgeClass}>{meta.label}</Badge>}
