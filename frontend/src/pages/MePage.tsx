@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CircleAlert, MessageSquare, RefreshCw, Smartphone, TrendingDown, TrendingUp } from 'lucide-react'
+import { CircleAlert, MessageSquare, RefreshCw, ScanLine, Smartphone, TrendingDown, TrendingUp } from 'lucide-react'
+import { Link, Navigate, useNavigate } from 'react-router-dom'
 
 import { BrandMark } from '@/components/BrandMark'
+import { classCodePath, QrScanner } from '@/components/QrScanner'
 import { Button } from '@/components/ui/button'
 import {
   startOfMonth,
@@ -13,6 +15,8 @@ import {
   type Tally,
 } from '@/lib/attendanceStats'
 import { asTimetableSlots, fetchMyDashboard, sendMentorMessage, type SendStatus, type StudentDashboard } from '@/lib/studentDashboard'
+import { useAuth } from '@/context/AuthContext'
+import { useDeviceKind } from '@/lib/device'
 import { hasSupabaseConfig } from '@/lib/supabase'
 import { addDays, DAY_NAMES, indiaNow, isoDow, slotLabel, toMinutes } from '@/lib/timetable'
 import { cn } from '@/lib/utils'
@@ -21,8 +25,14 @@ type Load = { kind: 'loading' } | { kind: 'not_linked' } | { kind: 'error'; mess
 
 // Public page. The phone linked at the student's first QR check-in is their
 // identity (no password); the server only ever returns that student's data.
+// Staff never see this page — signed-in staff are sent to their dashboard.
 export function MePage() {
+  const { session, isStaff, loading: authLoading } = useAuth()
+  const device = useDeviceKind()
+  const navigate = useNavigate()
   const [load, setLoad] = useState<Load>({ kind: 'loading' })
+  const [scanning, setScanning] = useState(false)
+  const [scanError, setScanError] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
     fetchMyDashboard()
@@ -34,11 +44,37 @@ export function MePage() {
 
   useEffect(() => {
     if (!hasSupabaseConfig) {
-      setLoad({ kind: 'error', message: "The attendance service isn't configured on this site copy." })
+      setLoad({ kind: 'error', message: "The attendance service isn't connected on this site." })
       return
     }
     refresh()
   }, [refresh])
+
+  function handleScan(text: string) {
+    const path = classCodePath(text)
+    if (!path) {
+      setScanning(false)
+      setScanError("That isn't a class check-in code. Scan the code shown on your teacher's screen.")
+      return
+    }
+    navigate(path)
+  }
+
+  if (!authLoading && session && isStaff) return <Navigate to="/dashboard" replace />
+
+  const scanButton = (
+    <Button
+      size="lg"
+      className="w-full"
+      onClick={() => {
+        setScanError(null)
+        setScanning(true)
+      }}
+    >
+      <ScanLine className="size-5" />
+      Scan class QR
+    </Button>
+  )
 
   return (
     <div className="mx-auto max-w-lg px-4 py-6">
@@ -54,20 +90,33 @@ export function MePage() {
         )}
       </div>
 
+      {scanning && (
+        <div className="mb-4">
+          <QrScanner onResult={handleScan} onClose={() => setScanning(false)} />
+        </div>
+      )}
+      {scanError && <p className="mb-4 text-sm text-destructive">{scanError}</p>}
+
       {load.kind === 'loading' && <p className="text-sm text-muted-foreground">Loading your attendance…</p>}
 
-      {load.kind === 'not_linked' && (
+      {load.kind === 'not_linked' && !scanning && (
         <div className="rounded-lg border border-border bg-card p-5">
           <Smartphone className="size-6 text-primary" />
-          <h1 className="mt-3 font-display text-lg font-semibold">This phone isn't linked yet</h1>
+          <h1 className="mt-3 font-display text-lg font-semibold">Check in to your first class</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Scan the QR code shown in your class once and enter your roll number. After that, this page shows
-            your attendance and marks.
+            In class, tap the button below and scan the code on your teacher's screen. Enter your roll number once —
+            this phone is then linked to you, and this page shows your attendance and marks.
           </p>
-          <p className="mt-3 text-xs text-muted-foreground">
-            Already linked? Open this page in the same browser you used for that first scan (for example Chrome,
-            not the camera app's built-in browser).
-          </p>
+          <div className="mt-4">{scanButton}</div>
+          {device === 'computer' && (
+            <p className="mt-4 text-xs text-muted-foreground">
+              This works best on your phone. Staff?{' '}
+              <Link to="/login" className="underline underline-offset-2 hover:text-foreground">
+                Sign in here
+              </Link>
+              .
+            </p>
+          )}
         </div>
       )}
 
@@ -83,7 +132,12 @@ export function MePage() {
         </div>
       )}
 
-      {load.kind === 'ready' && <Dashboard data={load.data} onSent={refresh} />}
+      {load.kind === 'ready' && (
+        <>
+          {!scanning && <div className="mb-4">{scanButton}</div>}
+          <Dashboard data={load.data} onSent={refresh} />
+        </>
+      )}
     </div>
   )
 }

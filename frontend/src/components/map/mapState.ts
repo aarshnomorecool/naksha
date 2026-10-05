@@ -1,10 +1,7 @@
-// Runtime state + simulation, ported from map-demo/campus-map-demo.html.
-// `MapState` is the single shape rendered every frame — the simulation
-// functions here mutate it today; useSupabaseData.ts mutates the exact same
-// shape once a Supabase project is wired up. Nothing downstream needs to
-// change when that swap happens.
+// Runtime state rendered by the map. Nothing here is invented: rooms start at
+// zero present and only real check-ins (via useSupabaseData.ts) change them.
 
-import { CLASSROOMS, PARKING_SPOTS } from './campusData'
+import { CLASSROOMS } from './campusData'
 
 export interface ClassroomState {
   id: string
@@ -17,41 +14,18 @@ export interface ClassroomState {
   present_count: number
 }
 
-export interface ParkingState {
-  id: string
-  lot_name: string
-  lng: number
-  lat: number
-  occupied: boolean
-}
-
 export interface MapState {
   classrooms: ClassroomState[]
-  parking: ParkingState[]
 }
 
-export function createSimulatedState(): MapState {
-  return {
-    classrooms: CLASSROOMS.map((c) => ({ ...c, present_count: Math.round(c.capacity * (0.25 + Math.random() * 0.55)) })),
-    parking: PARKING_SPOTS.map((p) => ({ ...p, occupied: Math.random() < 0.55 })),
-  }
+// The campus layout before the live list loads: real room names and
+// capacities, nobody present.
+export function createInitialState(): MapState {
+  return { classrooms: CLASSROOMS.map((c) => ({ ...c, present_count: 0 })) }
 }
 
 function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t
-}
-
-export function jitterClassroomPresence(state: MapState) {
-  state.classrooms.forEach((c) => {
-    const walk = Math.round((Math.random() - 0.5) * 12)
-    c.present_count = Math.min(c.capacity, Math.max(0, c.present_count + walk))
-  })
-}
-
-export function jitterParking(state: MapState) {
-  state.parking.forEach((p) => {
-    if (Math.random() < 0.12) p.occupied = !p.occupied
-  })
 }
 
 function lerpColor(a: number[], b: number[], t: number): [number, number, number] {

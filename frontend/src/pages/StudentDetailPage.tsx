@@ -71,10 +71,6 @@ export function StudentDetailPage() {
 
       <StudentAcademicsCards studentId={student.id} refreshKey={refreshKey} />
 
-      {!risk && (
-        <p className="mb-4 text-sm text-muted-foreground">No risk score on file for this student yet.</p>
-      )}
-
       {risk && (
         <Card className="mb-4">
           <CardHeader>

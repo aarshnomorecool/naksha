@@ -54,28 +54,3 @@ export const CLASSROOMS: ClassroomSeed[] = [
   { id: 'lib-digital', building: 'Library', room: 'Digital Library', floor: 2, capacity: 40, lng: 79.08832, lat: 21.14656 },
 ]
 
-export interface ParkingSpotSeed {
-  id: string
-  lot_name: string
-  lng: number
-  lat: number
-}
-
-export const PARKING_SPOTS: ParkingSpotSeed[] = [
-  { id: 'a1', lot_name: 'Lot A - Main Gate', lng: 79.08760, lat: 21.14430 },
-  { id: 'a2', lot_name: 'Lot A - Main Gate', lng: 79.08773, lat: 21.14430 },
-  { id: 'a3', lot_name: 'Lot A - Main Gate', lng: 79.08786, lat: 21.14430 },
-  { id: 'a4', lot_name: 'Lot A - Main Gate', lng: 79.08799, lat: 21.14430 },
-  { id: 'a5', lot_name: 'Lot A - Main Gate', lng: 79.08812, lat: 21.14430 },
-  { id: 'a6', lot_name: 'Lot A - Main Gate', lng: 79.08825, lat: 21.14430 },
-  { id: 'a7', lot_name: 'Lot A - Main Gate', lng: 79.08838, lat: 21.14430 },
-  { id: 'a8', lot_name: 'Lot A - Main Gate', lng: 79.08851, lat: 21.14430 },
-  { id: 'a9', lot_name: 'Lot A - Main Gate', lng: 79.08864, lat: 21.14430 },
-  { id: 'a10', lot_name: 'Lot A - Main Gate', lng: 79.08877, lat: 21.14430 },
-  { id: 'b1', lot_name: 'Lot B - Faculty', lng: 79.08655, lat: 21.14480 },
-  { id: 'b2', lot_name: 'Lot B - Faculty', lng: 79.08655, lat: 21.14490 },
-  { id: 'b3', lot_name: 'Lot B - Faculty', lng: 79.08655, lat: 21.14500 },
-  { id: 'b4', lot_name: 'Lot B - Faculty', lng: 79.08665, lat: 21.14480 },
-  { id: 'b5', lot_name: 'Lot B - Faculty', lng: 79.08665, lat: 21.14490 },
-  { id: 'b6', lot_name: 'Lot B - Faculty', lng: 79.08665, lat: 21.14500 },
-]

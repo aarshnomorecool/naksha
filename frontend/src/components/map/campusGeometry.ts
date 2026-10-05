@@ -1,14 +1,14 @@
 // Derived 3D geometry for the campus map: floor slabs, the per-floor room
 // layout used by the cutaway, and the generated surroundings (lawn, paths,
-// road, trees, parking). Everything is computed from BUILDINGS + the live
-// classroom/parking lists, so swapping in real traced footprints only means
+// road, trees). Everything is computed from BUILDINGS + the live classroom
+// list, so swapping in real traced footprints only means
 // editing campusData.ts.
 //
 // Room layout assumes roughly rectangular footprints (it works on the ring's
 // bounding box): a corridor runs down the long axis with rooms on both sides.
 
 import { BUILDINGS, CAMPUS_CENTER, type Building } from './campusData'
-import type { ClassroomState, ParkingState } from './mapState'
+import type { ClassroomState } from './mapState'
 
 export type LngLat = [number, number]
 export type Ring3 = [number, number, number][]
@@ -166,30 +166,6 @@ function mulberry32(seed: number) {
   }
 }
 
-export interface ParkingLot {
-  name: string
-  rect: Rect
-  occupied: number
-  total: number
-}
-
-export function parkingLots(spots: ParkingState[]): ParkingLot[] {
-  const groups = new Map<string, ParkingState[]>()
-  for (const s of spots) groups.set(s.lot_name, [...(groups.get(s.lot_name) ?? []), s])
-  return [...groups].map(([name, list]) => ({
-    name,
-    rect: inflate(ringBounds(list.map((s) => [s.lng, s.lat] as LngLat)), 4.5),
-    occupied: list.filter((s) => s.occupied).length,
-    total: list.length,
-  }))
-}
-
-export function spotRect(spot: ParkingState, lengthM = 4.6, widthM = 2.3): Rect {
-  const dLng = widthM / 2 / M_PER_DEG_LNG
-  const dLat = lengthM / 2 / M_PER_DEG_LAT
-  return { minLng: spot.lng - dLng, minLat: spot.lat - dLat, maxLng: spot.lng + dLng, maxLat: spot.lat + dLat }
-}
-
 export interface Surroundings {
   lawn: Rect
   road: LngLat[]
@@ -197,10 +173,9 @@ export interface Surroundings {
   trees: { position: LngLat; scale: number; shade: number }[]
 }
 
-export function buildSurroundings(spots: ParkingState[]): Surroundings {
+export function buildSurroundings(): Surroundings {
   const buildingRects = BUILDINGS.map((b) => ringBounds(b.ring))
-  const lotRects = parkingLots(spots).map((l) => l.rect)
-  const all = [...buildingRects, ...lotRects]
+  const all = buildingRects
   const extent: Rect = {
     minLng: Math.min(...all.map((r) => r.minLng)),
     minLat: Math.min(...all.map((r) => r.minLat)),
@@ -216,7 +191,7 @@ export function buildSurroundings(spots: ParkingState[]): Surroundings {
   ]
 
   // Promenade between the building rows, a spur to each building's facing
-  // edge, a gate path down to the road, and a driveway to each car park.
+  // edge, and a gate path down to the road.
   const centers = buildingRects.map(rectCenter)
   const midLat = centers.reduce((s, c) => s + c[1], 0) / centers.length
   const inset = 12 / M_PER_DEG_LNG
@@ -227,10 +202,6 @@ export function buildSurroundings(spots: ParkingState[]): Surroundings {
   })
   const gateLng = (extent.minLng + extent.maxLng) / 2
   paths.push([[gateLng, midLat], [gateLng, roadLat]])
-  for (const lot of lotRects) {
-    const c = rectCenter(lot)
-    paths.push([[c[0], lot.minLat], [c[0], roadLat]])
-  }
 
   const nearPath = (p: LngLat) =>
     paths.some((seg) => {
@@ -241,7 +212,7 @@ export function buildSurroundings(spots: ParkingState[]): Surroundings {
       const maxLat = Math.max(a[1], b[1])
       return contains(inflate({ minLng, minLat, maxLng, maxLat }, 4.5), p)
     })
-  const blocked = [...buildingRects.map((r) => inflate(r, 7)), ...lotRects.map((r) => inflate(r, 4))]
+  const blocked = buildingRects.map((r) => inflate(r, 7))
 
   const rand = mulberry32(20250913)
   const trees: Surroundings['trees'] = []

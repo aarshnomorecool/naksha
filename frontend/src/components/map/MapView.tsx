@@ -11,7 +11,7 @@ import { BUILDINGS, CAMPUS_CENTER, type Building } from './campusData'
 import { distanceMeters, floorCount, rectCenter, ringBounds } from './campusGeometry'
 import { buildLayers, classroomPct, type RoomPiece, type ShellPiece } from './layers'
 import { getCurrentLecture, onTimetableChange } from './lectureInfo'
-import { createSimulatedState, jitterClassroomPresence, jitterParking, occupancyColor, type ClassroomState, type MapState } from './mapState'
+import { createInitialState, occupancyColor, type ClassroomState, type MapState } from './mapState'
 import { subscribeSupabaseData } from './useSupabaseData'
 
 // Zoom past OPEN_ZOOM and the building nearest the screen centre opens into a
@@ -47,7 +47,7 @@ function rgb(c: [number, number, number]) {
 
 export function MapView() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [state] = useState<MapState>(() => createSimulatedState())
+  const [state] = useState<MapState>(() => createInitialState())
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | undefined>()
   const [selectedRoomId, setSelectedRoomId] = useState<string | undefined>()
   const [, setVersion] = useState(0)
@@ -184,10 +184,6 @@ export function MapView() {
           const b = (object as ShellPiece).building
           return { html: `<b>${b.name}</b><br/>Click to see inside`, style }
         }
-        if (layer.id === 'parking-lots') {
-          const lot = object as { name: string; occupied: number; total: number }
-          return { html: `<b>${lot.name}</b><br/>${lot.occupied} of ${lot.total} spaces in use`, style }
-        }
         return null
       },
     })
@@ -215,21 +211,9 @@ export function MapView() {
       setVersion((v) => v + 1)
     }
 
-    let cleanupSupabase = () => {}
-    let classroomInterval: number | undefined
-    let parkingInterval: number | undefined
-    if (hasSupabaseConfig) {
-      cleanupSupabase = subscribeSupabaseData(state, bump)
-    } else {
-      classroomInterval = window.setInterval(() => {
-        jitterClassroomPresence(state)
-        bump()
-      }, 4000)
-      parkingInterval = window.setInterval(() => {
-        jitterParking(state)
-        bump()
-      }, 3500)
-    }
+    // No simulation fallback: without a configured database the map shows
+    // the campus with nobody present and a "Not connected" badge.
+    const cleanupSupabase = subscribeSupabaseData(state, bump)
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && targetRef.current) selectBuildingRef.current(undefined, true)
@@ -242,8 +226,6 @@ export function MapView() {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
       cleanupSupabase()
-      if (classroomInterval !== undefined) window.clearInterval(classroomInterval)
-      if (parkingInterval !== undefined) window.clearInterval(parkingInterval)
       map.remove()
       mapRef.current = null
       overlayRef.current = null
@@ -263,7 +245,7 @@ export function MapView() {
         )}
       >
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
-        {hasSupabaseConfig ? 'Live' : 'Simulated feed for demo'}
+        {hasSupabaseConfig ? 'Live' : 'Not connected'}
       </span>
 
       {!building && (

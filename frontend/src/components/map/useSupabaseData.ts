@@ -1,4 +1,3 @@
-import { fetchAllRows } from '@/lib/fetchAllRows'
 import { supabase } from '@/lib/supabase'
 import type { MapState } from './mapState'
 
@@ -7,105 +6,58 @@ interface ClassroomRow {
   room_number: string
   floor: number
   capacity: number
-  current_occupancy: number
   lng: number
   lat: number
   buildings: { name: string } | null
 }
 
-interface ParkingRow {
-  id: string
-  lot_name: string
-  lng: number
-  lat: number
-  occupied: number
-}
-
+// Live classroom occupancy for the public map. Counts come from the
+// classroom_occupancy_today view (0009): today's distinct students per room,
+// readable by anyone, never naming who. Any check-in updates the classrooms
+// row via trigger, which arrives here over realtime and triggers a re-count.
 export function subscribeSupabaseData(state: MapState, onChange: () => void): () => void {
   if (!supabase) return () => {}
   const client = supabase
   let cancelled = false
 
-  async function loadInitial() {
-    const today = new Date().toISOString().slice(0, 10)
-    const [classrooms, parking, todayRows] = await Promise.all([
-      client
-        .from('classrooms')
-        .select('id, room_number, floor, capacity, current_occupancy, lng, lat, buildings(name)')
-        .returns<ClassroomRow[]>(),
-      client.from('parking_spots').select('id, lot_name, lng, lat, occupied').returns<ParkingRow[]>(),
-      // Today's real per-room counts — current_occupancy goes stale overnight
-      // (the trigger only runs on writes), so prefer the tally when available.
-      fetchAllRows<{ classroom_id: string }>((from, to) =>
-        client.from('attendance').select('classroom_id').eq('session_date', today).order('id').range(from, to),
-      ).catch(() => [] as { classroom_id: string }[]),
-    ])
-    if (cancelled) return
-
-    const todayByRoom = new Map<string, number>()
-    for (const row of todayRows) {
-      todayByRoom.set(row.classroom_id, (todayByRoom.get(row.classroom_id) ?? 0) + 1)
-    }
-
-    if (classrooms.data) {
-      state.classrooms = classrooms.data.map((classroom) => ({
-        id: classroom.id,
-        building: classroom.buildings?.name ?? '',
-        room: classroom.room_number,
-        floor: classroom.floor,
-        capacity: classroom.capacity,
-        lng: classroom.lng,
-        lat: classroom.lat,
-        present_count: todayByRoom.get(classroom.id) ?? classroom.current_occupancy,
-      }))
-    }
-    if (parking.data) {
-      state.parking = parking.data.map((parkingSpot) => ({
-        id: parkingSpot.id,
-        lot_name: parkingSpot.lot_name,
-        lng: parkingSpot.lng,
-        lat: parkingSpot.lat,
-        occupied: parkingSpot.occupied > 0,
-      }))
-    }
+  async function loadCounts() {
+    const { data } = await client.from('classroom_occupancy_today').select('classroom_id, present')
+    if (cancelled || !data) return
+    const byRoom = new Map((data as { classroom_id: string; present: number }[]).map((r) => [r.classroom_id, r.present]))
+    for (const c of state.classrooms) c.present_count = byRoom.get(c.id) ?? 0
     onChange()
   }
 
-  loadInitial()
+  async function loadInitial() {
+    const { data } = await client
+      .from('classrooms')
+      .select('id, room_number, floor, capacity, lng, lat, buildings(name)')
+      .returns<ClassroomRow[]>()
+    if (cancelled) return
+    if (data) {
+      state.classrooms = data.map((c) => ({
+        id: c.id,
+        building: c.buildings?.name ?? '',
+        room: c.room_number,
+        floor: c.floor,
+        capacity: c.capacity,
+        lng: c.lng,
+        lat: c.lat,
+        present_count: 0,
+      }))
+    }
+    await loadCounts()
+  }
 
-  const classroomChannel = client
+  void loadInitial()
+
+  const channel = client
     .channel('classrooms-changes')
-    .on<{ id: string; current_occupancy: number }>(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'classrooms' },
-      (payload) => {
-        const classroom = state.classrooms.find((item) => item.id === payload.new.id)
-        if (classroom) {
-          classroom.present_count = payload.new.current_occupancy
-          onChange()
-        }
-      },
-    )
-    .subscribe()
-
-  const parkingChannel = client
-    .channel('parking-changes')
-    .on<{ id: string; occupied: number }>(
-      'postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'parking_spots' },
-      (payload) => {
-        const parkingSpot = state.parking.find((item) => item.id === payload.new.id)
-        if (parkingSpot) {
-          parkingSpot.occupied = payload.new.occupied > 0
-          onChange()
-        }
-      },
-    )
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'classrooms' }, () => void loadCounts())
     .subscribe()
 
   return () => {
     cancelled = true
-    client.removeChannel(classroomChannel)
-    client.removeChannel(parkingChannel)
+    client.removeChannel(channel)
   }
 }

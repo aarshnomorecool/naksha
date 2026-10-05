@@ -7,13 +7,10 @@ import {
   FLOOR_H,
   inflate,
   layoutRooms,
-  parkingLots,
   PLATE_H,
   rectRing,
   ringBounds,
   ROOM_H,
-  spotRect,
-  type ParkingLot,
   type Ring3,
   type RoomCell,
   type Surroundings,
@@ -30,14 +27,6 @@ const WALL: RGBA = [236, 232, 224, 255]
 const GLASS: RGBA = [86, 112, 140, 255]
 const ROOF: RGBA = [214, 212, 205, 255]
 const PLATE: RGBA = [228, 229, 231, 255]
-const CAR_COLORS: RGBA[] = [
-  [226, 232, 240, 255],
-  [148, 163, 184, 255],
-  [30, 41, 59, 255],
-  [185, 28, 28, 255],
-  [30, 64, 175, 255],
-  [212, 212, 216, 255],
-]
 
 export function classroomPct(classroom: Pick<ClassroomState, 'present_count' | 'capacity'>): number {
   if (classroom.capacity <= 0) return 0
@@ -51,12 +40,6 @@ function mix(a: RGBA, b: [number, number, number], t: number, alpha = a[3]): RGB
     Math.round(a[2] + (b[2] - a[2]) * t),
     alpha,
   ]
-}
-
-function hash(s: string): number {
-  let h = 0
-  for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) | 0
-  return Math.abs(h)
 }
 
 export interface ShellPiece {
@@ -88,18 +71,14 @@ export interface LayerInput {
   callbacks: MapLayerCallbacks
 }
 
-let surroundingsCache: { key: string; value: Surroundings } | null = null
-function surroundingsFor(state: MapState): Surroundings {
-  const key = state.parking.map((p) => p.id).join(',')
-  if (!surroundingsCache || surroundingsCache.key !== key) {
-    surroundingsCache = { key, value: buildSurroundings(state.parking) }
-  }
-  return surroundingsCache.value
+let surroundings: Surroundings | null = null
+function surroundingsFor(): Surroundings {
+  surroundings ??= buildSurroundings()
+  return surroundings
 }
 
 export function buildLayers({ state, tick, explode, selectedRoomId, callbacks }: LayerInput) {
-  const env = surroundingsFor(state)
-  const lots = parkingLots(state.parking)
+  const env = surroundingsFor()
   const anyOpen = Object.values(explode).some((t) => t > 0.01)
 
   const shell: ShellPiece[] = []
@@ -199,32 +178,6 @@ export function buildLayers({ state, tick, explode, selectedRoomId, callbacks }:
     getColor: [238, 233, 222, 255],
     capRounded: true,
     jointRounded: true,
-  })
-
-  const lotsLayer = new SolidPolygonLayer<ParkingLot>({
-    id: 'parking-lots',
-    data: lots,
-    getPolygon: (lot) => rectRing(lot.rect),
-    getFillColor: [112, 118, 126, 255],
-    pickable: true,
-    updateTriggers: { getPolygon: tick },
-  })
-
-  const slotsLayer = new SolidPolygonLayer({
-    id: 'parking-slots',
-    data: state.parking,
-    getPolygon: (spot) => rectRing(spotRect(spot, 5.2, 2.7), 0.02),
-    getFillColor: [134, 140, 148, 255],
-  })
-
-  const carsLayer = new SolidPolygonLayer({
-    id: 'cars',
-    data: state.parking.filter((p) => p.occupied),
-    getPolygon: (spot) => rectRing(spotRect(spot), 0.05),
-    extruded: true,
-    getElevation: 1.45,
-    getFillColor: (spot) => CAR_COLORS[hash(spot.id) % CAR_COLORS.length],
-    updateTriggers: { getFillColor: tick },
   })
 
   const trunksLayer = new ColumnLayer({
@@ -375,9 +328,6 @@ export function buildLayers({ state, tick, explode, selectedRoomId, callbacks }:
     lawnLayer,
     roadLayer,
     pathsLayer,
-    lotsLayer,
-    slotsLayer,
-    carsLayer,
     trunksLayer,
     canopyLayer,
     shellLayer,

@@ -20,64 +20,57 @@ interface ClassroomRow {
   room_number: string
   floor: number
   capacity: number
-  current_occupancy: number
   buildings: { name: string } | null
 }
 
-function demoPresentCount(id: string, capacity: number) {
-  const seed = Array.from(id).reduce((total, character) => total + character.charCodeAt(0), 0)
-  return Math.round(capacity * (0.32 + (seed % 42) / 100))
-}
-
+// Real data only: the room list comes from Supabase and present counts from
+// the classroom_occupancy_today view (0009). Until it loads — or if the site
+// isn't connected — every room shows 0, never an invented number.
 function useBuildingClassrooms(buildingName: string | undefined) {
-  const demoClassrooms = useMemo<ClassroomPresence[]>(
-    () => CLASSROOMS
-      .filter((classroom) => classroom.building === buildingName)
-      .map((classroom) => ({
-        id: classroom.id,
-        room: classroom.room,
-        floor: classroom.floor,
-        capacity: classroom.capacity,
-        presentCount: demoPresentCount(classroom.id, classroom.capacity),
+  const layout = useMemo<ClassroomPresence[]>(
+    () =>
+      CLASSROOMS.filter((c) => c.building === buildingName).map((c) => ({
+        id: c.id,
+        room: c.room,
+        floor: c.floor,
+        capacity: c.capacity,
+        presentCount: 0,
       })),
     [buildingName],
   )
-  const [classrooms, setClassrooms] = useState<ClassroomPresence[]>(demoClassrooms)
+  const [classrooms, setClassrooms] = useState<ClassroomPresence[]>(layout)
 
   useEffect(() => {
-    setClassrooms(demoClassrooms)
+    setClassrooms(layout)
     if (!buildingName || !supabase) return
 
     let cancelled = false
     const client = supabase
-    const loadClassrooms = async () => {
-      const { data } = await client
-        .from('classrooms')
-        .select('id, room_number, floor, capacity, current_occupancy, buildings(name)')
-        .returns<ClassroomRow[]>()
-      if (cancelled || !data) return
-      setClassrooms(data
-        .filter((classroom) => classroom.buildings?.name === buildingName)
-        .map((classroom) => ({
-          id: classroom.id,
-          room: classroom.room_number,
-          floor: classroom.floor,
-          capacity: classroom.capacity,
-          presentCount: classroom.current_occupancy,
-        })))
+    const load = async () => {
+      const [roomsRes, countsRes] = await Promise.all([
+        client.from('classrooms').select('id, room_number, floor, capacity, buildings(name)').returns<ClassroomRow[]>(),
+        client.from('classroom_occupancy_today').select('classroom_id, present'),
+      ])
+      if (cancelled || !roomsRes.data) return
+      const counts = new Map(((countsRes.data ?? []) as { classroom_id: string; present: number }[]).map((r) => [r.classroom_id, r.present]))
+      setClassrooms(
+        roomsRes.data
+          .filter((c) => c.buildings?.name === buildingName)
+          .map((c) => ({ id: c.id, room: c.room_number, floor: c.floor, capacity: c.capacity, presentCount: counts.get(c.id) ?? 0 })),
+      )
     }
 
-    loadClassrooms()
+    void load()
     const channel = client
       .channel(`building-classrooms-${buildingName}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'classrooms' }, loadClassrooms)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'classrooms' }, () => void load())
       .subscribe()
 
     return () => {
       cancelled = true
       client.removeChannel(channel)
     }
-  }, [buildingName, demoClassrooms])
+  }, [buildingName, layout])
 
   return classrooms
 }
@@ -117,7 +110,7 @@ export function BuildingDetailPage() {
             <p className="mt-2 max-w-xl text-sm text-slate-300">Choose a floor and a classroom to see the current number of students present.</p>
           </div>
           <span className="rounded-full border border-white/20 px-3 py-1.5 text-xs font-medium text-slate-200">
-            {hasSupabaseConfig ? 'Live attendance feed' : 'Simulated feed for demo'}
+            {hasSupabaseConfig ? 'Live attendance feed' : 'Not connected'}
           </span>
         </div>
 
