@@ -1,34 +1,153 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AmbientLight, DirectionalLight, LightingEffect } from '@deck.gl/core'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import maplibregl from 'maplibre-gl'
-import { Clock, DoorOpen, UsersRound, X } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { Clock, Layers3, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { hasSupabaseConfig } from '@/lib/supabase'
-import { CAMPUS_CENTER } from './campusData'
-import { buildLayers, classroomPct } from './layers'
-import { getCurrentLecture } from './lectureInfo'
-import { createSimulatedState, jitterClassroomPresence, jitterParking, type MapState } from './mapState'
+import { cn } from '@/lib/utils'
+import { BUILDINGS, CAMPUS_CENTER, type Building } from './campusData'
+import { distanceMeters, floorCount, rectCenter, ringBounds } from './campusGeometry'
+import { buildLayers, classroomPct, type RoomPiece, type ShellPiece } from './layers'
+import { getCurrentLecture, onTimetableChange } from './lectureInfo'
+import { createSimulatedState, jitterClassroomPresence, jitterParking, occupancyColor, type ClassroomState, type MapState } from './mapState'
 import { subscribeSupabaseData } from './useSupabaseData'
 
-function occupancyBarColor(pct: number): string {
-  if (pct >= 75) return '#ef4444'
-  if (pct >= 40) return '#f59e0b'
-  return '#22c55e'
+// Zoom past OPEN_ZOOM and the building nearest the screen centre opens into a
+// cutaway; zoom back out past CLOSE_ZOOM and it closes. The gap stops it
+// flickering at the boundary.
+const OPEN_ZOOM = 18.8
+const CLOSE_ZOOM = 18.3
+// Centre on everything drawn (buildings + car parks sit south of
+// CAMPUS_CENTER), not just the seed's nominal centre point.
+const campusExtent = BUILDINGS.map((b) => ringBounds(b.ring))
+const OVERVIEW = {
+  center: [
+    (Math.min(...campusExtent.map((r) => r.minLng)) + Math.max(...campusExtent.map((r) => r.maxLng))) / 2,
+    CAMPUS_CENTER[1] - 0.0003,
+  ] as [number, number],
+  zoom: 17.6,
+  pitch: 55,
+  bearing: -20,
+}
+const EXPLODE_MS = 650
+
+const lighting = new LightingEffect({
+  ambient: new AmbientLight({ color: [255, 255, 255], intensity: 0.85 }),
+  sun: new DirectionalLight({ color: [255, 244, 226], intensity: 1.25, direction: [-1, -2, -3] }),
+  sky: new DirectionalLight({ color: [205, 220, 255], intensity: 0.45, direction: [2, 1, -1] }),
+})
+
+const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+
+function rgb(c: [number, number, number]) {
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`
 }
 
 export function MapView() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const navigate = useNavigate()
-  const [initialState] = useState<MapState>(() => createSimulatedState())
-  const [selectedId, setSelectedId] = useState<string | undefined>()
-  const [tick, setTick] = useState(0)
-  const selectedIdRef = useRef<string | undefined>(undefined)
-  const tickRef = useRef(0)
-  const renderRef = useRef(() => {})
+  const [state] = useState<MapState>(() => createSimulatedState())
+  const [selectedBuildingId, setSelectedBuildingId] = useState<string | undefined>()
+  const [selectedRoomId, setSelectedRoomId] = useState<string | undefined>()
+  const [, setVersion] = useState(0)
+
+  const mapRef = useRef<maplibregl.Map | null>(null)
+  const overlayRef = useRef<MapboxOverlay | null>(null)
+  const explodeRaw = useRef<Record<string, number>>({})
+  const targetRef = useRef<string | undefined>(undefined)
+  const roomRef = useRef<string | undefined>(undefined)
+  const frameRef = useRef(0)
+  const rafRef = useRef(0)
+  const flyingRef = useRef(false)
+  const reduceMotion = useRef(
+    typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  )
+
+  const render = useCallback(() => {
+    const overlay = overlayRef.current
+    if (!overlay) return
+    const eased: Record<string, number> = {}
+    for (const [id, t] of Object.entries(explodeRaw.current)) eased[id] = easeInOut(t)
+    frameRef.current += 1
+    overlay.setProps({
+      layers: buildLayers({
+        state,
+        tick: frameRef.current,
+        explode: eased,
+        selectedRoomId: roomRef.current,
+        callbacks: {
+          onBuildingClick: (b) => selectBuildingRef.current(b.id, true),
+          onRoomClick: (c) => selectRoomRef.current(c.id),
+        },
+      }),
+    })
+  }, [state])
+
+  const animate = useCallback(() => {
+    if (rafRef.current) return
+    let last = performance.now()
+    const step = (now: number) => {
+      const dt = now - last
+      last = now
+      let moving = false
+      for (const b of BUILDINGS) {
+        const target = b.id === targetRef.current ? 1 : 0
+        const raw = explodeRaw.current[b.id] ?? 0
+        if (raw === target) continue
+        const next = reduceMotion.current
+          ? target
+          : Math.min(1, Math.max(0, raw + (target > raw ? 1 : -1) * (dt / EXPLODE_MS)))
+        explodeRaw.current[b.id] = next
+        if (next !== target) moving = true
+      }
+      render()
+      rafRef.current = moving ? requestAnimationFrame(step) : 0
+    }
+    rafRef.current = requestAnimationFrame(step)
+  }, [render])
+
+  const selectBuilding = useCallback(
+    (id: string | undefined, fly: boolean) => {
+      const map = mapRef.current
+      if (id !== targetRef.current) {
+        targetRef.current = id
+        roomRef.current = undefined
+        setSelectedBuildingId(id)
+        setSelectedRoomId(undefined)
+        animate()
+      }
+      if (!fly || !map) return
+      flyingRef.current = true
+      map.once('moveend', () => {
+        flyingRef.current = false
+      })
+      const duration = reduceMotion.current ? 0 : 1400
+      if (id) {
+        const b = BUILDINGS.find((x) => x.id === id)!
+        map.flyTo({ center: rectCenter(ringBounds(b.ring)), zoom: 19.2, pitch: 68, duration, essential: true })
+      } else {
+        map.flyTo({ ...OVERVIEW, duration, essential: true })
+      }
+    },
+    [animate],
+  )
+
+  const selectRoom = useCallback(
+    (id: string | undefined) => {
+      roomRef.current = id
+      setSelectedRoomId(id)
+      render()
+    },
+    [render],
+  )
+
+  // deck's onClick callbacks are created once per render() call; route them
+  // through refs so they always hit the latest selection logic.
+  const selectBuildingRef = useRef(selectBuilding)
+  const selectRoomRef = useRef(selectRoom)
+  selectBuildingRef.current = selectBuilding
+  selectRoomRef.current = selectRoom
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -38,227 +157,273 @@ export function MapView() {
       style: {
         version: 8,
         sources: {},
-        layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#0b1220' } }],
+        layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#dde3d8' } }],
       },
-      center: CAMPUS_CENTER,
-      zoom: 17.6,
-      pitch: 55,
-      bearing: -20,
+      ...OVERVIEW,
+      maxPitch: 72,
       antialias: true,
     })
+    mapRef.current = map
 
     const overlay = new MapboxOverlay({
       interleaved: true,
       layers: [],
+      effects: [lighting],
       getTooltip: ({ object, layer }) => {
         if (!object || !layer) return null
-        if (layer.id === 'classrooms') {
-          const pct = classroomPct(object)
+        const style = { background: 'rgba(15,23,42,0.92)', color: '#f8fafc', fontSize: '12px', borderRadius: '6px', padding: '6px 8px' }
+        if (layer.id === 'rooms') {
+          const c = (object as RoomPiece).classroom
+          const lecture = getCurrentLecture(c.id, c.building)
           return {
-            html: `<b>${object.building} — ${object.room}</b><br/>${object.present_count}/${object.capacity} present (${pct}%)<br/><em>Click for lecture details</em>`,
+            html: `<b>${c.room}</b> · Floor ${c.floor}<br/>${lecture.status === 'live' ? `${lecture.subject}, ${lecture.teacher}` : 'No class now'}<br/>${c.present_count}/${c.capacity} present`,
+            style,
           }
         }
-        if (layer.id === 'parking') {
-          return { html: `<b>Parking</b><br/>${object.occupied} of ${object.total} spaces in use` }
+        if (layer.id === 'building-shell' || layer.id === 'floor-plates') {
+          const b = (object as ShellPiece).building
+          return { html: `<b>${b.name}</b><br/>Click to see inside`, style }
         }
-        if (layer.id === 'buildings') {
-          return { html: `<b>${object.shortLabel}</b><br/>${object.name}<br/><em>Click to view floors and classes</em>` }
+        if (layer.id === 'parking-lots') {
+          const lot = object as { name: string; occupied: number; total: number }
+          return { html: `<b>${lot.name}</b><br/>${lot.occupied} of ${lot.total} spaces in use`, style }
         }
         return null
       },
     })
-
+    overlayRef.current = overlay
     map.addControl(overlay as unknown as maplibregl.IControl)
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right')
 
-    const renderLayers = () => {
-      overlay.setProps({
-        layers: buildLayers(
-          initialState,
-          {
-            onBuildingClick: (building) => navigate(`/map/building/${building.id}`),
-            onClassroomClick: (classroom) => {
-              selectedIdRef.current = classroom.id
-              setSelectedId(classroom.id)
-            },
-          },
-          tickRef.current,
-          selectedIdRef.current,
-        ),
-      })
-    }
-    renderRef.current = renderLayers
+    map.on('load', render)
+    const offTimetable = onTimetableChange(render)
+    map.on('moveend', () => {
+      if (flyingRef.current) return
+      const zoom = map.getZoom()
+      if (zoom >= OPEN_ZOOM) {
+        const center = map.getCenter()
+        const nearest = BUILDINGS.map((b) => ({ b, d: distanceMeters([center.lng, center.lat], rectCenter(ringBounds(b.ring))) }))
+          .sort((x, y) => x.d - y.d)[0]
+        if (nearest && nearest.d < 80) selectBuildingRef.current(nearest.b.id, false)
+      } else if (zoom < CLOSE_ZOOM && targetRef.current) {
+        selectBuildingRef.current(undefined, false)
+      }
+    })
+
     const bump = () => {
-      tickRef.current = performance.now()
-      setTick(tickRef.current)
-      renderLayers()
+      render()
+      setVersion((v) => v + 1)
     }
-
-    map.on('load', renderLayers)
 
     let cleanupSupabase = () => {}
     let classroomInterval: number | undefined
     let parkingInterval: number | undefined
-
     if (hasSupabaseConfig) {
-      cleanupSupabase = subscribeSupabaseData(initialState, bump)
+      cleanupSupabase = subscribeSupabaseData(state, bump)
     } else {
       classroomInterval = window.setInterval(() => {
-        jitterClassroomPresence(initialState)
+        jitterClassroomPresence(state)
         bump()
       }, 4000)
       parkingInterval = window.setInterval(() => {
-        jitterParking(initialState)
+        jitterParking(state)
         bump()
       }, 3500)
     }
 
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && targetRef.current) selectBuildingRef.current(undefined, true)
+    }
+    window.addEventListener('keydown', onKey)
+
     return () => {
+      window.removeEventListener('keydown', onKey)
+      offTimetable()
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = 0
       cleanupSupabase()
       if (classroomInterval !== undefined) window.clearInterval(classroomInterval)
       if (parkingInterval !== undefined) window.clearInterval(parkingInterval)
       map.remove()
+      mapRef.current = null
+      overlayRef.current = null
     }
-    // initialState is a stable mutated-in-place object; navigate is stable.
-    // selectedId/tick are mirrored via refs so the deck callbacks stay fresh.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigate])
+  }, [render, state])
 
-  // Re-render the deck highlight when selection changes (covers the Close
-  // button, which lives outside deck's click handling).
-  useEffect(() => {
-    selectedIdRef.current = selectedId
-    renderRef.current()
-  }, [selectedId])
-
-  const selected = selectedId ? initialState.classrooms.find((c) => c.id === selectedId) : undefined
-  // `tick` is read here so the popup's present-count refreshes on every
-  // simulation / realtime update even though `initialState` is mutated in place.
-  void tick
-  const lecture = selected ? getCurrentLecture(selected.id, selected.building) : undefined
-  const selectedPct = selected ? classroomPct(selected) : 0
+  const building = selectedBuildingId ? BUILDINGS.find((b) => b.id === selectedBuildingId) : undefined
 
   return (
-    <div className="relative h-full w-full bg-[#0b1220]">
+    <div className="relative h-full w-full bg-[#dde3d8]">
       <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
 
-      <Badge
-        className={`absolute top-4 left-4 z-10 rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide text-white uppercase ${
-          hasSupabaseConfig ? 'bg-emerald-600' : 'bg-red-600'
-        }`}
+      <span
+        className={cn(
+          'absolute top-4 left-4 z-10 flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold text-white shadow',
+          hasSupabaseConfig ? 'bg-emerald-600' : 'bg-red-600',
+        )}
       >
-        {hasSupabaseConfig ? 'Live feed' : 'Simulated feed for demo'}
-      </Badge>
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+        {hasSupabaseConfig ? 'Live' : 'Simulated feed for demo'}
+      </span>
 
-      <div className="absolute top-4 right-4 z-10 text-right">
-        <div className="text-base font-bold tracking-wide text-slate-100">NAKSHA</div>
-        <div className="text-xs text-slate-400">College live map</div>
-      </div>
-
-      <Card className="absolute bottom-4 left-4 z-10 min-w-[225px] border-white/10 bg-slate-900/90 text-slate-100 shadow-lg">
-        <CardContent className="text-xs">
-          <h3 className="mb-1 text-[11px] tracking-wide text-slate-400 uppercase">Campus guide</h3>
-          <p className="text-slate-300">Click a class block to see its lecture. Click a building for floors.</p>
-          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <LegendSwatch color="#22c55e" label="Low" />
-            <LegendSwatch color="#f59e0b" label="Medium" />
-            <LegendSwatch color="#ef4444" label="High" />
-            <LegendSwatch color="#475569" label="Building" />
-            <LegendSwatch color="#fef3c7" label="Parking" />
+      {!building && (
+        <div className="absolute bottom-4 left-4 z-10 w-[250px] rounded-lg border border-black/5 bg-white/90 p-3 text-xs text-slate-700 shadow-lg backdrop-blur">
+          <p className="flex items-center gap-1.5 font-semibold text-slate-900">
+            <Layers3 className="size-3.5 text-sky-700" />
+            Zoom in or click a building
+          </p>
+          <p className="mt-1 text-slate-600">Its floors open up to show every classroom and the class running now.</p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <span>Students present</span>
+            <span
+              className="h-2 flex-1 rounded-full"
+              style={{ background: `linear-gradient(to right, ${rgb(occupancyColor(0))}, ${rgb(occupancyColor(50))}, ${rgb(occupancyColor(100))})` }}
+            />
           </div>
-          <p className="mt-2 text-[11px] text-slate-500">Bar height also scales with occupancy.</p>
-        </CardContent>
-      </Card>
+          <div className="mt-0.5 flex justify-between pl-[92px] text-[10px] text-slate-500">
+            <span>Few</span>
+            <span>Full</span>
+          </div>
+        </div>
+      )}
 
-      {selected && lecture && (
-        <Card className="absolute right-4 bottom-4 z-10 w-[300px] border-white/10 bg-slate-900/95 text-slate-100 shadow-xl">
-          <CardContent className="p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold tracking-[0.14em] text-sky-300 uppercase">
-                  {selected.building}
-                </p>
-                <h2 className="mt-1 flex items-center gap-2 text-xl font-semibold">
-                  <DoorOpen className="size-5 text-sky-300" />
-                  {selected.room}
-                </h2>
-                <p className="mt-0.5 text-xs text-slate-400">Floor {selected.floor}</p>
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label="Close class details"
-                onClick={() => setSelectedId(undefined)}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="size-4" />
-              </Button>
-            </div>
-
-            <div className="mt-4 rounded-lg bg-white/5 p-3">
-              <p className="text-xs font-semibold tracking-wide text-slate-400 uppercase">Now</p>
-              <p className="mt-1 text-sm font-semibold">{lecture.subject}</p>
-              <p className="mt-0.5 text-xs text-slate-400">{lecture.teacher}</p>
-              <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-300">
-                <Clock className="size-3.5 text-sky-300" />
-                {lecture.timeSlot}
-                <span
-                  className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
-                    lecture.status === 'live'
-                      ? 'bg-emerald-500/15 text-emerald-300'
-                      : 'bg-white/10 text-slate-300'
-                  }`}
-                >
-                  {lecture.status === 'live' ? 'Live now' : lecture.status === 'break' ? 'Break' : 'Done'}
-                </span>
-              </p>
-            </div>
-
-            <div className="mt-4 rounded-lg bg-white/5 p-3">
-              <p className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-400 uppercase">
-                <UsersRound className="size-3.5 text-sky-300" />
-                Attendance
-              </p>
-              <p className="mt-2 text-2xl font-semibold tabular-nums">
-                {selected.present_count}
-                <span className="text-sm font-normal text-slate-400"> / {selected.capacity}</span>
-              </p>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{ width: `${selectedPct}%`, background: occupancyBarColor(selectedPct) }}
-                />
-              </div>
-              <p className="mt-1.5 text-[11px] text-slate-500">{selectedPct}% occupied</p>
-            </div>
-
-            <Button
-              variant="secondary"
-              size="sm"
-              className="mt-4 w-full"
-              onClick={() => {
-                const buildingId =
-                  selected.building === 'Main Academic Block'
-                    ? 'main-academic'
-                    : selected.building === 'Computer Science Block'
-                      ? 'cs-block'
-                      : 'library'
-                navigate(`/map/building/${buildingId}`)
-              }}
-            >
-              View floor plan
-            </Button>
-          </CardContent>
-        </Card>
+      {building && (
+        <BuildingPanel
+          building={building}
+          classrooms={state.classrooms}
+          selectedRoomId={selectedRoomId}
+          onSelectRoom={selectRoom}
+          onClose={() => selectBuilding(undefined, true)}
+        />
       )}
     </div>
   )
 }
 
-function LegendSwatch({ color, label }: { color: string; label: string }) {
+function BuildingPanel({
+  building,
+  classrooms,
+  selectedRoomId,
+  onSelectRoom,
+  onClose,
+}: {
+  building: Building
+  classrooms: ClassroomState[]
+  selectedRoomId?: string
+  onSelectRoom: (id: string) => void
+  onClose: () => void
+}) {
+  const rooms = classrooms.filter((c) => c.building === building.name)
+  const floors = floorCount(building, classrooms)
+  const present = rooms.reduce((s, c) => s + c.present_count, 0)
+  const capacity = rooms.reduce((s, c) => s + c.capacity, 0)
+
   return (
-    <span className="inline-flex items-center gap-1.5 text-slate-300">
-      <span className="inline-block h-2.5 w-2.5 rounded-sm border border-white/20" style={{ background: color }} />
-      {label}
-    </span>
+    <aside className="absolute top-4 right-14 bottom-4 z-10 flex w-[330px] max-w-[calc(100%-5rem)] flex-col overflow-hidden rounded-xl border border-black/5 bg-white/95 text-slate-900 shadow-xl backdrop-blur">
+      <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-4">
+        <div>
+          <p className="text-xs font-semibold text-sky-700">{building.shortLabel}</p>
+          <h2 className="font-display text-lg leading-tight font-semibold">{building.name}</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            {floors} floor{floors === 1 ? '' : 's'}
+            {capacity > 0 && (
+              <>
+                {' '}
+                · <span className="font-semibold text-slate-800 tabular-nums">{present}</span> of {capacity} seats in use
+              </>
+            )}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close building"
+          className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3">
+        {Array.from({ length: floors }, (_, i) => floors - i).map((floor) => {
+          const floorRooms = rooms
+            .filter((c) => c.floor === floor)
+            .sort((a, b) => a.room.localeCompare(b.room, undefined, { numeric: true }))
+          return (
+            <section key={floor} className="mb-3">
+              <h3 className="px-1 pb-1 text-xs font-semibold text-slate-500">Floor {floor}</h3>
+              {floorRooms.length === 0 ? (
+                <p className="rounded-md border border-dashed border-slate-200 px-3 py-2 text-xs text-slate-400">
+                  No classrooms on this floor
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-1.5">
+                  {floorRooms.map((c) => {
+                    const lecture = getCurrentLecture(c.id, c.building)
+                    const pct = classroomPct(c)
+                    const active = c.id === selectedRoomId
+                    return (
+                      <li key={c.id}>
+                        <button
+                          type="button"
+                          onClick={() => onSelectRoom(c.id)}
+                          className={cn(
+                            'w-full rounded-lg border px-3 py-2 text-left transition-colors',
+                            active ? 'border-sky-500 bg-sky-50' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50',
+                          )}
+                        >
+                          <span className="flex items-center justify-between gap-2">
+                            <span className="text-sm font-semibold">{c.room}</span>
+                            <span className="text-xs text-slate-500 tabular-nums">
+                              <span className="font-semibold text-slate-800">{c.present_count}</span>/{c.capacity}
+                            </span>
+                          </span>
+                          <span className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-600">
+                            {lecture.status === 'live' ? (
+                              <>
+                                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                                <span className="truncate">{lecture.subject}</span>
+                              </>
+                            ) : (
+                              <span className="truncate text-slate-400">
+                                {lecture.status === 'break' ? `Next: ${lecture.subject}` : 'No more classes today'}
+                              </span>
+                            )}
+                          </span>
+                          {active && lecture.status !== 'done' && (
+                            <span className="mt-1.5 block text-xs text-slate-500">
+                              {lecture.teacher}
+                              <span className="mt-0.5 flex items-center gap-1">
+                                <Clock className="size-3" />
+                                {lecture.timeSlot}
+                              </span>
+                            </span>
+                          )}
+                          <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-slate-100">
+                            <span
+                              className="block h-full rounded-full transition-all"
+                              style={{ width: `${pct}%`, background: rgb(occupancyColor(pct)) }}
+                            />
+                          </span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
+          )
+        })}
+      </div>
+
+      <div className="border-t border-slate-200 p-3">
+        <Link
+          to={`/map/building/${building.id}`}
+          className="block rounded-md border border-slate-200 px-3 py-2 text-center text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Open full floor plan
+        </Link>
+      </div>
+    </aside>
   )
 }

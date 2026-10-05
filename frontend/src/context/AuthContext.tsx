@@ -4,31 +4,33 @@ import { supabase } from '@/lib/supabase'
 
 interface AuthContextValue {
   session: Session | null
+  // false only when the server positively says this account isn't staff.
+  isStaff: boolean
   loading: boolean
   signIn: (email: string, password: string) => Promise<string | null>
-  signUp: (email: string, password: string) => Promise<string | null>
   signOut: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-// Dashboard tables (students/attendance/risk_scores) are authenticated-only
-// per RLS in supabase/migrations/0002_rls.sql and 0003_risk_scores.sql — this
-// is the minimal Supabase Auth wrapper needed to actually reach them. No
-// separate "mentors" table: any authenticated Supabase user can view the
-// dashboard for now, since there's no invite/role system yet.
+// Being signed in isn't enough to see student data: the account must be in
+// the `staff` table (supabase/migrations/0007_staff_role.sql). RLS enforces
+// that on every table; isStaff here only decides what the UI shows, so a
+// failed check (e.g. 0007 not applied yet) falls back to letting RLS decide.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [isStaff, setIsStaff] = useState(true)
+  const [sessionLoading, setSessionLoading] = useState(true)
+  const [staffLoading, setStaffLoading] = useState(false)
 
   useEffect(() => {
     if (!supabase) {
-      setLoading(false)
+      setSessionLoading(false)
       return
     }
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session)
-      setLoading(false)
+      setSessionLoading(false)
     })
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession)
@@ -36,15 +38,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => listener.subscription.unsubscribe()
   }, [])
 
+  const userId = session?.user.id
+  useEffect(() => {
+    if (!supabase || !userId) {
+      setIsStaff(true)
+      return
+    }
+    let cancelled = false
+    setStaffLoading(true)
+    supabase
+      .rpc('is_staff')
+      .then(({ data, error }) => {
+        if (!cancelled) setIsStaff(error ? true : data === true)
+      })
+      .then(() => {
+        if (!cancelled) setStaffLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [userId])
+
   async function signIn(email: string, password: string) {
     if (!supabase) return 'Supabase is not configured.'
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    return error?.message ?? null
-  }
-
-  async function signUp(email: string, password: string) {
-    if (!supabase) return 'Supabase is not configured.'
-    const { error } = await supabase.auth.signUp({ email, password })
     return error?.message ?? null
   }
 
@@ -54,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, loading, signIn, signUp, signOut }}>
+    <AuthContext.Provider value={{ session, isStaff, loading: sessionLoading || staffLoading, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   )

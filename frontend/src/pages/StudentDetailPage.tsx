@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { ResetMenu, StudentAcademicsCards } from '@/components/student/StudentAcademics'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { fetchStudentDetail, recommendedActions, RISK_BAND_META, type StudentDetail } from '@/lib/riskDashboard'
+import { fetchLinkedDevice, resetStudentDevice } from '@/lib/selfCheckIn'
 
 export function StudentDetailPage() {
   const { studentId } = useParams<{ studentId: string }>()
   const [detail, setDetail] = useState<StudentDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Bumped after a reset so every card refetches.
+  const [refreshKey, setRefreshKey] = useState(0)
 
   useEffect(() => {
     if (!studentId) return
@@ -17,18 +22,19 @@ export function StudentDetailPage() {
       .then(setDetail)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load student.'))
       .finally(() => setLoading(false))
-  }, [studentId])
+  }, [studentId, refreshKey])
 
   if (loading) return <p className="p-6 text-sm text-muted-foreground">Loading…</p>
   if (error) return <p className="p-6 text-sm text-destructive">{error}</p>
   if (!detail) return <p className="p-6 text-sm text-muted-foreground">Student not found.</p>
 
-  const { student, risk, checkIns, attendanceTrend } = detail
+  const { student, risk, checkIns, attendanceTrend, classDays, presentDays } = detail
   const meta = risk ? RISK_BAND_META[risk.risk_band] : null
-  const livePct = Math.round((100 * attendanceTrend.filter((d) => d.present).length) / Math.max(1, attendanceTrend.length))
+  const livePct = classDays > 0 ? Math.round((100 * presentDays) / classDays) : null
   const chartData = attendanceTrend.map((d) => ({
     date: d.date.slice(5),
-    present: d.present ? 1 : 0,
+    present: d.status === 'no_class' ? 0.15 : d.status === 'present' ? 1 : 0.15,
+    status: d.status,
   }))
 
   return (
@@ -45,12 +51,25 @@ export function StudentDetailPage() {
             {student.section ? ` · Section ${student.section}` : ''}
           </p>
           <p className="mt-1 text-sm">
-            <span className="font-semibold tabular-nums">{livePct}%</span>{' '}
-            <span className="text-muted-foreground">present over the last {attendanceTrend.length} days (live)</span>
+            {livePct === null ? (
+              <span className="text-muted-foreground">No classes recorded in the last 14 days</span>
+            ) : (
+              <>
+                <span className="font-semibold tabular-nums">{livePct}%</span>{' '}
+                <span className="text-muted-foreground">
+                  present on {presentDays} of {classDays} class days in the last 14 days (live)
+                </span>
+              </>
+            )}
           </p>
         </div>
-        {meta && <Badge className={meta.badgeClass}>{meta.label}</Badge>}
+        <div className="flex shrink-0 items-center gap-1">
+          {meta && <Badge className={meta.badgeClass}>{meta.label}</Badge>}
+          <ResetMenu studentId={student.id} onDone={() => setRefreshKey((k) => k + 1)} />
+        </div>
       </div>
+
+      <StudentAcademicsCards studentId={student.id} refreshKey={refreshKey} />
 
       {!risk && (
         <p className="mb-4 text-sm text-muted-foreground">No risk score on file for this student yet.</p>
@@ -91,7 +110,7 @@ export function StudentDetailPage() {
                 <Tooltip formatter={(v) => (v ? 'Present' : 'Absent')} />
                 <Bar dataKey="present" radius={[3, 3, 0, 0]}>
                   {chartData.map((d, i) => (
-                    <Cell key={i} fill={d.present ? '#22c55e' : '#ef4444'} />
+                    <Cell key={i} fill={d.status === 'present' ? '#22c55e' : d.status === 'absent' ? '#ef4444' : '#cbd5e1'} />
                   ))}
                 </Bar>
               </BarChart>
@@ -114,6 +133,8 @@ export function StudentDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      <LinkedPhoneCard studentId={student.id} />
 
       <Card>
         <CardHeader>
@@ -147,5 +168,60 @@ export function StudentDetailPage() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+function LinkedPhoneCard({ studentId }: { studentId: string }) {
+  const [linked, setLinked] = useState<{ boundAt: string } | null | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetchLinkedDevice(studentId)
+      .then(setLinked)
+      .catch(() => setLinked(null))
+  }, [studentId])
+
+  async function handleReset() {
+    setBusy(true)
+    setError(null)
+    try {
+      await resetStudentDevice(studentId)
+      setLinked(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reset the linked phone.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="mb-4">
+      <CardHeader>
+        <CardTitle className="text-base">Check-in phone</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        {linked === undefined ? (
+          <span className="text-muted-foreground">Loading…</span>
+        ) : linked ? (
+          <>
+            <span>
+              Linked since {new Date(linked.boundAt).toLocaleDateString()}
+              <span className="block text-xs text-muted-foreground">
+                Reset if the student changed phones or someone else linked this roll number.
+              </span>
+            </span>
+            <Button variant="outline" size="sm" onClick={handleReset} disabled={busy}>
+              {busy ? 'Resetting…' : 'Reset linked phone'}
+            </Button>
+          </>
+        ) : (
+          <span className="text-muted-foreground">
+            No phone linked yet. The student's first QR scan will link one.
+          </span>
+        )}
+        {error && <p className="w-full text-xs text-destructive">{error}</p>}
+      </CardContent>
+    </Card>
   )
 }

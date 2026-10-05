@@ -3,7 +3,7 @@ import { ArrowLeft, BookOpen, Building2, Clock, DoorOpen, UsersRound } from 'luc
 import { Link, Navigate, useParams } from 'react-router-dom'
 
 import { BUILDINGS, CLASSROOMS } from '@/components/map/campusData'
-import { getCurrentLecture } from '@/components/map/lectureInfo'
+import { getCurrentLecture, useTimetableVersion } from '@/components/map/lectureInfo'
 import { hasSupabaseConfig, supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 
@@ -83,6 +83,7 @@ function useBuildingClassrooms(buildingName: string | undefined) {
 }
 
 export function BuildingDetailPage() {
+  useTimetableVersion()
   const { buildingId } = useParams()
   const building = BUILDINGS.find((item) => item.id === buildingId)
   const classrooms = useBuildingClassrooms(building?.name)
@@ -179,7 +180,11 @@ export function BuildingDetailPage() {
                       </span>
                       {lecture && (
                         <span className="mt-2 block truncate text-xs text-slate-300">
-                          {lecture.subject} · {lecture.teacher}
+                          {lecture.status === 'live'
+                            ? `${lecture.subject} · ${lecture.teacher}`
+                            : lecture.status === 'break'
+                              ? `Next: ${lecture.subject}`
+                              : 'No more classes today'}
                         </span>
                       )}
                       <span className="mt-3 block text-2xl font-semibold tabular-nums">{classroom.presentCount}</span>
@@ -198,10 +203,10 @@ export function BuildingDetailPage() {
                   <>
                     <h2 className="mt-4 flex items-center gap-2 font-display text-2xl font-semibold"><DoorOpen className="size-5 text-sky-300" />{selectedClassroom.room}</h2>
                     <p className="mt-1 text-sm text-slate-400">Floor {selectedClassroom.floor}</p>
-                    {lecture && (
+                    {lecture && lecture.status !== 'done' && (
                       <div className="mt-5 rounded-lg bg-[#202126] p-4">
                         <p className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-slate-400 uppercase">
-                          <BookOpen className="size-4 text-sky-300" /> Now
+                          <BookOpen className="size-4 text-sky-300" /> {lecture.status === 'live' ? 'Now' : 'Next'}
                         </p>
                         <p className="mt-2 text-sm font-semibold text-slate-100">{lecture.subject}</p>
                         <p className="mt-0.5 text-xs text-slate-400">{lecture.teacher}</p>
@@ -215,7 +220,7 @@ export function BuildingDetailPage() {
                                 : 'bg-white/10 text-slate-300'
                             }`}
                           >
-                            {lecture.status === 'live' ? 'Live now' : lecture.status === 'break' ? 'Break' : 'Done'}
+                            {lecture.status === 'live' ? 'Live now' : 'Up next'}
                           </span>
                         </p>
                       </div>

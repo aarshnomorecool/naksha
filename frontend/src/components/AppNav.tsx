@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext'
 import { cn } from '@/lib/utils'
 
 const links = [
-  { to: '/checkin', label: 'Student' },
+  { to: '/me', label: 'Student' },
   { to: '/dashboard', label: 'Mentor' },
   { to: '/map', label: 'College live map' },
 ]

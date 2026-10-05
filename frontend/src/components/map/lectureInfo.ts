@@ -1,90 +1,91 @@
-// Demo timetable for the campus map + building page.
+// "What's running in this room right now", read from the timetable table
+// (supabase/migrations/0008_timetable_marks.sql). Teachers stay 'XYZ' until a
+// mentor edits the slot — no real or invented names live in the code.
 //
-// There is no lectures/teachers table in Supabase yet (see
-// supabase/migrations/0001_schema.sql) — so this module derives a stable,
-// per-classroom "current lecture" deterministically from the classroom id.
-// Same classroom always shows the same subject/teacher; the time slot follows
-// the actual clock so it reads as "currently going on" during college hours.
-//
-// When a real timetable lands in the DB, replace getCurrentLecture() with a
-// Supabase query and keep the return shape — MapView + BuildingDetailPage
-// both consume this shape and won't need to change.
+// The timetable is loaded once into a small shared store and kept fresh via
+// realtime, so synchronous callers (map layers, tooltips) can ask per room
+// without each fetching. Components re-render through useTimetableVersion().
+
+import { useSyncExternalStore } from 'react'
+import { supabase } from '@/lib/supabase'
+import { EARLY_CHECKIN_MINUTES, fetchTimetable, indiaNow, slotLabel, toMinutes, type TimetableSlot } from '@/lib/timetable'
 
 export interface CurrentLecture {
   subject: string
   teacher: string
   timeSlot: string
+  // live = a period is running now; break = between periods / before the
+  // first; done = after the last period today (or no classes today).
   status: 'live' | 'break' | 'done'
 }
 
-const SUBJECTS_BY_BUILDING: Record<string, string[]> = {
-  'Main Academic Block': [
-    'Engineering Mathematics',
-    'Applied Physics',
-    'Communication Skills',
-    'Basic Electrical Engineering',
-    'Engineering Graphics',
-  ],
-  'Computer Science Block': [
-    'Data Structures',
-    'Operating Systems',
-    'Database Management',
-    'Computer Networks',
-    'Machine Learning Basics',
-  ],
-  Library: ['Self Study', 'Reference Hour', 'Digital Literacy'],
+let slots: TimetableSlot[] = []
+let version = 0
+let loading: Promise<void> | null = null
+const listeners = new Set<() => void>()
+
+function notify() {
+  version += 1
+  for (const l of listeners) l()
 }
 
-const FALLBACK_SUBJECTS = ['Applied Sciences', 'Seminar', 'Tutorial Hour']
-
-const TEACHERS = [
-  'Dr. S. Deshmukh',
-  'Prof. R. Kulkarni',
-  'Dr. P. Joshi',
-  'Prof. A. Patil',
-  'Dr. N. Sharma',
-  'Prof. V. Rao',
-  'Dr. K. Iyer',
-  'Prof. M. Nair',
-]
-
-const SLOTS = [
-  '09:00 – 10:00',
-  '10:00 – 11:00',
-  '11:15 – 12:15',
-  '12:15 – 13:15',
-  '14:00 – 15:00',
-  '15:00 – 16:00',
-  '16:15 – 17:15',
-]
-
-function hashString(value: string): number {
-  return Array.from(value).reduce((total, ch) => total + ch.charCodeAt(0), 0)
+async function reload() {
+  try {
+    slots = await fetchTimetable()
+  } catch {
+    // Keep the last good copy; callers fall back to "no class now".
+  }
+  notify()
 }
 
-export function getCurrentLecture(
-  classroomId: string,
-  building: string,
-  now: Date = new Date(),
-): CurrentLecture {
-  const subjects = SUBJECTS_BY_BUILDING[building] ?? FALLBACK_SUBJECTS
-  const seed = hashString(`${building}:${classroomId}`)
-  const subject = subjects[seed % subjects.length]
-  const teacher = TEACHERS[(seed >> 3) % TEACHERS.length]
+export function loadTimetable(): Promise<void> {
+  if (loading) return loading
+  loading = reload()
+  if (supabase) {
+    supabase
+      .channel('timetable-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'timetable' }, () => void reload())
+      .subscribe()
+  }
+  return loading
+}
 
-  const hour = now.getHours()
-  // College hours 9:00–17:30. Map the wall clock onto a slot; outside hours
-  // the card reads as "done for today" instead of inventing a live class.
-  if (hour < 9) {
-    return { subject, teacher, timeSlot: SLOTS[0], status: 'break' }
+// Force a reload right after a local edit instead of waiting for realtime.
+export function refreshTimetable(): Promise<void> {
+  void loadTimetable()
+  return reload()
+}
+
+export function onTimetableChange(listener: () => void): () => void {
+  void loadTimetable()
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+
+export function useTimetableVersion(): number {
+  return useSyncExternalStore(onTimetableChange, () => version)
+}
+
+export function getTimetable(): TimetableSlot[] {
+  return slots
+}
+
+export function getCurrentLecture(classroomId: string, _building?: string, at: Date = new Date()): CurrentLecture {
+  void loadTimetable()
+  const now = indiaNow(at)
+  const today = slots
+    .filter((s) => s.classroom_id === classroomId && s.day_of_week === now.dow)
+    .sort((a, b) => toMinutes(a.starts_at) - toMinutes(b.starts_at))
+
+  const live = today.find(
+    (s) => now.minutes >= toMinutes(s.starts_at) - EARLY_CHECKIN_MINUTES && now.minutes < toMinutes(s.ends_at),
+  )
+  if (live) {
+    return { subject: live.subject, teacher: live.teacher, timeSlot: slotLabel(live), status: 'live' }
   }
-  if (hour >= 17) {
-    return { subject, teacher, timeSlot: SLOTS[SLOTS.length - 1], status: 'done' }
+  const next = today.find((s) => toMinutes(s.starts_at) > now.minutes)
+  if (next) {
+    return { subject: next.subject, teacher: next.teacher, timeSlot: slotLabel(next), status: 'break' }
   }
-  if (hour === 13) {
-    return { subject, teacher, timeSlot: '13:15 – 14:00', status: 'break' }
-  }
-  const slotIndex = hour < 13 ? hour - 9 : hour - 10
-  const timeSlot = SLOTS[Math.min(slotIndex, SLOTS.length - 1)]
-  return { subject, teacher, timeSlot, status: 'live' }
+  return { subject: '', teacher: '', timeSlot: '', status: 'done' }
 }

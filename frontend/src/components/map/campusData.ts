@@ -10,16 +10,22 @@ export interface Building {
   name: string
   shortLabel: string
   height: number
+  // Storeys drawn on the map. Raised automatically if a classroom sits on a
+  // higher floor (see floorCount in campusGeometry.ts).
+  floors: number
   ring: [number, number][]
 }
 
+// Rings match supabase/seed.sql's buildings.footprint exactly — classrooms are
+// grouped by building *name*, so a ring under the wrong name puts that
+// building's rooms in someone else's footprint.
 export const BUILDINGS: Building[] = [
-  { id: 'main-academic', name: 'Main Academic Block', shortLabel: 'B-1', height: 14, ring: [[79.08682, 21.14646], [79.08718, 21.14646], [79.08718, 21.14674], [79.08682, 21.14674]] },
-  { id: 'library', name: 'Library', shortLabel: 'B-2', height: 14, ring: [[79.08922, 21.14646], [79.08958, 21.14646], [79.08958, 21.14674], [79.08922, 21.14674]] },
-  { id: 'cs-block', name: 'Computer Science Block', shortLabel: 'B-3', height: 14, ring: [[79.08922, 21.14486], [79.08958, 21.14486], [79.08958, 21.14514], [79.08922, 21.14514]] },
-  { id: 'admin', name: 'Administration Block', shortLabel: 'B-4', height: 14, ring: [[79.08682, 21.14486], [79.08718, 21.14486], [79.08718, 21.14514], [79.08682, 21.14514]] },
-  { id: 'cafeteria', name: 'Cafeteria', shortLabel: 'Cafeteria', height: 14, ring: [[79.08802, 21.14486], [79.08838, 21.14486], [79.08838, 21.14514], [79.08802, 21.14514]] },
-  { id: 'hostel', name: 'Hostel Block', shortLabel: 'Hostel', height: 14, ring: [[79.08802, 21.14646], [79.08838, 21.14646], [79.08838, 21.14674], [79.08802, 21.14674]] },
+  { id: 'main-academic', name: 'Main Academic Block', shortLabel: 'B-1', height: 14, floors: 3, ring: [[79.08682, 21.14646], [79.08718, 21.14646], [79.08718, 21.14674], [79.08682, 21.14674]] },
+  { id: 'library', name: 'Library', shortLabel: 'B-2', height: 14, floors: 2, ring: [[79.08802, 21.14646], [79.08838, 21.14646], [79.08838, 21.14674], [79.08802, 21.14674]] },
+  { id: 'cs-block', name: 'Computer Science Block', shortLabel: 'B-3', height: 14, floors: 3, ring: [[79.08922, 21.14646], [79.08958, 21.14646], [79.08958, 21.14674], [79.08922, 21.14674]] },
+  { id: 'admin', name: 'Administration Block', shortLabel: 'B-4', height: 14, floors: 2, ring: [[79.08682, 21.14486], [79.08718, 21.14486], [79.08718, 21.14514], [79.08682, 21.14514]] },
+  { id: 'cafeteria', name: 'Cafeteria', shortLabel: 'Cafeteria', height: 14, floors: 1, ring: [[79.08802, 21.14486], [79.08838, 21.14486], [79.08838, 21.14514], [79.08802, 21.14514]] },
+  { id: 'hostel', name: 'Hostel Block', shortLabel: 'Hostel', height: 14, floors: 4, ring: [[79.08922, 21.14486], [79.08958, 21.14486], [79.08958, 21.14514], [79.08922, 21.14514]] },
 ]
 
 export interface ClassroomSeed {

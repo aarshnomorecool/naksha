@@ -9,8 +9,12 @@ import { DashboardListPage } from '@/pages/DashboardListPage'
 import { BuildingDetailPage } from '@/pages/BuildingDetailPage'
 import { HomePage } from '@/pages/HomePage'
 import { LoginPage } from '@/pages/LoginPage'
+import { MarksPage } from '@/pages/MarksPage'
+import { MePage } from '@/pages/MePage'
+import { RosterImportPage } from '@/pages/RosterImportPage'
 import { ScanPage } from '@/pages/ScanPage'
 import { StudentDetailPage } from '@/pages/StudentDetailPage'
+import { TimetableEditorPage } from '@/pages/TimetableEditorPage'
 
 function App() {
   return (
@@ -26,6 +30,8 @@ function App() {
               <Route path="/login" element={<LoginPage />} />
               {/* Public: students land here from a classroom QR, no login. */}
               <Route path="/scan" element={<ScanPage />} />
+              {/* Public: a student's own dashboard, identified by their linked phone. */}
+              <Route path="/me" element={<MePage />} />
               <Route
                 path="/checkin"
                 element={
@@ -40,6 +46,30 @@ function App() {
                 element={
                   <RequireAuth>
                     <DashboardListPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/dashboard/timetable"
+                element={
+                  <RequireAuth>
+                    <TimetableEditorPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/dashboard/marks"
+                element={
+                  <RequireAuth>
+                    <MarksPage />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/dashboard/import"
+                element={
+                  <RequireAuth>
+                    <RosterImportPage />
                   </RequireAuth>
                 }
               />

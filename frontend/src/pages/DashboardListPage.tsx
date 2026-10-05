@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import { MessagesInbox } from '@/components/MessagesInbox'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { fetchTodaySummary, subscribeTodayAttendance, type TodaySummary } from '@/lib/liveAttendance'
@@ -156,12 +157,27 @@ export function DashboardListPage() {
     <div className="mx-auto max-w-6xl px-4 py-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="font-display text-xl font-semibold">Mentor dashboard</h1>
-        {!loading && !error && roster.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {roster.length} students · {counts.needs_attention} need attention
-          </p>
-        )}
+        <div className="flex items-baseline gap-4">
+          {!loading && !error && roster.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {roster.length} students · {counts.needs_attention} need attention
+            </p>
+          )}
+          <div className="flex gap-1.5">
+            <Link to="/dashboard/timetable" className="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-accent">
+              Timetable
+            </Link>
+            <Link to="/dashboard/marks" className="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-accent">
+              Marks
+            </Link>
+            <Link to="/dashboard/import" className="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-accent">
+              Import students
+            </Link>
+          </div>
+        </div>
       </div>
+
+      <MessagesInbox />
 
       <section className="mt-4 rounded-lg border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2">

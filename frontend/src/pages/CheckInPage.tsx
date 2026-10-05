@@ -1,11 +1,11 @@
-import { Html5Qrcode } from 'html5-qrcode'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
+import { Maximize2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { checkInByRollNumber, fetchClassrooms, type CheckedInStudent, type ClassroomOption } from '@/lib/checkIn'
-import { buildCheckInUrl } from '@/lib/selfCheckIn'
+import { buildCheckInUrl, issueCheckInCode } from '@/lib/selfCheckIn'
 
 interface LogEntry {
   rollNumber: string
@@ -14,35 +14,74 @@ interface LogEntry {
   status: 'checked_in' | 'already_checked_in'
 }
 
-const READER_ID = 'checkin-reader'
 const LAST_CLASSROOM_KEY = 'naksha-checkin-classroom'
+const REFRESH_SECONDS = 20
+
+function useRotatingCode(classroomId: string) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [secondsLeft, setSecondsLeft] = useState(REFRESH_SECONDS)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!classroomId) return
+    let cancelled = false
+    let nextRefreshAt = 0
+
+    const refresh = async () => {
+      try {
+        const code = await issueCheckInCode(classroomId)
+        if (cancelled) return
+        setUrl(buildCheckInUrl(classroomId, code.token))
+        setError(null)
+      } catch {
+        if (!cancelled) {
+          setUrl(null)
+          setError("Couldn't create a check-in code. Make sure migration 0005 has been applied in Supabase.")
+        }
+      }
+      nextRefreshAt = Date.now() + REFRESH_SECONDS * 1000
+    }
+
+    void refresh()
+    const timer = window.setInterval(() => {
+      const left = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000))
+      setSecondsLeft(left)
+      if (left === 0) {
+        nextRefreshAt = Date.now() + REFRESH_SECONDS * 1000
+        void refresh()
+      }
+    }, 1000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [classroomId])
+
+  return { url, secondsLeft, error }
+}
 
 export function CheckInPage() {
   const [classrooms, setClassrooms] = useState<ClassroomOption[]>([])
   const [classroomId, setClassroomId] = useState<string>('')
   const [loadingClassrooms, setLoadingClassrooms] = useState(true)
+  const [fullscreen, setFullscreen] = useState(false)
 
-  const [cameraOn, setCameraOn] = useState(false)
-  const [cameraError, setCameraError] = useState<string | null>(null)
   const [manualInput, setManualInput] = useState('')
   const [lookupError, setLookupError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [log, setLog] = useState<LogEntry[]>([])
-  const scannerRef = useRef<Html5Qrcode | null>(null)
-  const pauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const classroomIdRef = useRef(classroomId)
-  classroomIdRef.current = classroomId
+
+  const { url, secondsLeft, error: codeError } = useRotatingCode(classroomId)
+  const selectedRoom = classrooms.find((c) => c.id === classroomId)
 
   useEffect(() => {
     fetchClassrooms()
       .then((rooms) => {
         setClassrooms(rooms)
         const saved = localStorage.getItem(LAST_CLASSROOM_KEY)
-        if (saved && rooms.some((r) => r.id === saved)) {
-          setClassroomId(saved)
-        } else if (rooms.length > 0) {
-          setClassroomId(rooms[0].id)
-        }
+        if (saved && rooms.some((r) => r.id === saved)) setClassroomId(saved)
+        else if (rooms.length > 0) setClassroomId(rooms[0].id)
       })
       .catch((e: unknown) => setLookupError(e instanceof Error ? e.message : 'Failed to load classrooms.'))
       .finally(() => setLoadingClassrooms(false))
@@ -60,17 +99,13 @@ export function CheckInPage() {
     ])
   }
 
-  async function recordCheckIn(rawCode: string, method: 'qr' | 'manual') {
-    const room = classroomIdRef.current
-    if (!room) {
-      setLookupError('Select a classroom first.')
-      return
-    }
+  async function recordManualCheckIn(roll: string) {
+    if (!classroomId) return
     setBusy(true)
     try {
-      const result = await checkInByRollNumber(rawCode, room, method)
+      const result = await checkInByRollNumber(roll, classroomId, 'manual')
       if (result.status === 'not_found') {
-        setLookupError(`No student found for "${rawCode}".`)
+        setLookupError(`No student found for "${roll}".`)
         return
       }
       setLookupError(null)
@@ -82,50 +117,16 @@ export function CheckInPage() {
     }
   }
 
-  function handleScan(decodedText: string) {
-    void recordCheckIn(decodedText, 'qr')
-    scannerRef.current?.pause(true)
-    pauseTimeoutRef.current = setTimeout(() => {
-      try {
-        scannerRef.current?.resume()
-      } catch {
-        // scanner may already be stopped (page navigated away) — ignore
-      }
-    }, 1500)
-  }
-
-  async function startCamera() {
-    setCameraError(null)
-    const scanner = new Html5Qrcode(READER_ID)
-    scannerRef.current = scanner
-    try {
-      await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 240 }, handleScan, undefined)
-      setCameraOn(true)
-    } catch {
-      setCameraError('Could not access a camera. Use the roll number field below instead.')
-    }
-  }
-
-  useEffect(() => {
-    return () => {
-      if (pauseTimeoutRef.current) clearTimeout(pauseTimeoutRef.current)
-      const scanner = scannerRef.current
-      if (scanner) {
-        scanner.stop().then(() => scanner.clear()).catch(() => {})
-      }
-    }
-  }, [])
-
   return (
     <div className="mx-auto max-w-4xl px-4 py-6">
-      <h1 className="text-xl font-semibold">Check-in kiosk</h1>
+      <h1 className="text-xl font-semibold">Class check-in</h1>
       <p className="text-sm text-muted-foreground">
-        Scan a student's badge as they enter the classroom. Writes a real attendance record — the map's
-        occupancy layer updates from this automatically.
+        Show this code on the projector. Students scan it with their phone camera; the map and mentor
+        dashboard update as they check in.
       </p>
 
       <div className="mt-6">
-        <Label htmlFor="classroom-select">This kiosk is stationed at</Label>
+        <Label htmlFor="classroom-select">Classroom</Label>
         <select
           id="classroom-select"
           value={classroomId}
@@ -142,74 +143,51 @@ export function CheckInPage() {
         </select>
       </div>
 
-      {classroomId && (
-        <div className="mt-6 flex flex-col gap-4 rounded-md border border-border bg-card p-4 sm:flex-row sm:items-center">
-          <div className="shrink-0 rounded-md border border-border bg-white p-2">
-            <QRCodeSVG value={buildCheckInUrl(classroomId)} size={140} />
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold">Classroom QR code</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Display this on the projector or print it for the door. Students scan it with their
-              phone camera — it opens a check-in form for this classroom, and their attendance
-              appears on the map and mentor dashboard automatically.
-            </p>
-            <p className="mt-2 truncate font-mono text-[11px] text-muted-foreground">
-              {buildCheckInUrl(classroomId)}
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-2"
-              onClick={() => void navigator.clipboard.writeText(buildCheckInUrl(classroomId))}
-            >
-              Copy check-in link
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <div className="mt-6 grid gap-6 md:grid-cols-2">
-        <div>
-          <div className="overflow-hidden rounded-md border border-border bg-card">
-            <div id={READER_ID} className={cameraOn ? 'aspect-square w-full' : 'hidden'} />
-            {!cameraOn && (
-              <div className="flex aspect-square w-full flex-col items-center justify-center gap-3 p-6 text-center">
-                <p className="text-sm text-muted-foreground">Camera is off.</p>
-                <Button onClick={startCamera} disabled={!classroomId}>Start camera</Button>
+      <div className="mt-6 grid gap-6 md:grid-cols-[auto_1fr]">
+        <div className="rounded-md border border-border bg-card p-4">
+          {codeError ? (
+            <p className="max-w-[240px] text-sm text-destructive">{codeError}</p>
+          ) : url ? (
+            <>
+              <div className="rounded-md bg-white p-3">
+                <QRCodeSVG value={url} size={220} />
               </div>
-            )}
-          </div>
-          {cameraError && <p className="mt-2 text-xs text-destructive">{cameraError}</p>}
-
-          <div className="mt-4">
-            <Label htmlFor="manual-roll">Or enter a roll number</Label>
-            <form
-              className="mt-1.5 flex gap-2"
-              onSubmit={(e) => {
-                e.preventDefault()
-                if (!manualInput.trim() || busy) return
-                void recordCheckIn(manualInput, 'manual')
-                setManualInput('')
-              }}
-            >
-              <Input
-                id="manual-roll"
-                value={manualInput}
-                onChange={(e) => setManualInput(e.target.value)}
-                placeholder="e.g. NKS24CS041"
-                disabled={!classroomId}
-              />
-              <Button type="submit" disabled={!classroomId || busy}>Check in</Button>
-            </form>
-            {lookupError && <p className="mt-2 text-xs text-destructive">{lookupError}</p>}
-          </div>
+              <CountdownBar secondsLeft={secondsLeft} />
+              <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => setFullscreen(true)}>
+                <Maximize2 className="size-4" />
+                Show full screen
+              </Button>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">Creating code…</p>
+          )}
         </div>
 
         <div>
-          <h2 className="text-sm font-medium text-muted-foreground">Checked in this session</h2>
+          <h2 className="text-sm font-medium">Student without a phone?</h2>
+          <form
+            className="mt-1.5 flex max-w-sm gap-2"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (!manualInput.trim() || busy) return
+              void recordManualCheckIn(manualInput)
+              setManualInput('')
+            }}
+          >
+            <Input
+              aria-label="Roll number"
+              value={manualInput}
+              onChange={(e) => setManualInput(e.target.value)}
+              placeholder="Roll number"
+              disabled={!classroomId}
+            />
+            <Button type="submit" disabled={!classroomId || busy}>Check in</Button>
+          </form>
+          {lookupError && <p className="mt-2 text-xs text-destructive">{lookupError}</p>}
+
+          <h2 className="mt-6 text-sm font-medium text-muted-foreground">Checked in manually this session</h2>
           {log.length === 0 ? (
-            <p className="mt-2 text-sm text-muted-foreground">No check-ins yet.</p>
+            <p className="mt-2 text-sm text-muted-foreground">None yet.</p>
           ) : (
             <ul className="mt-2 flex flex-col gap-2">
               {log.map((entry, i) => (
@@ -231,6 +209,43 @@ export function CheckInPage() {
           )}
         </div>
       </div>
+
+      {fullscreen && url && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-white p-6 text-slate-900">
+          <button
+            type="button"
+            aria-label="Exit full screen"
+            onClick={() => setFullscreen(false)}
+            className="absolute top-4 right-4 rounded-md p-2 text-slate-500 hover:bg-slate-100"
+          >
+            <X className="size-6" />
+          </button>
+          {selectedRoom && (
+            <p className="font-display text-3xl font-semibold">
+              {selectedRoom.buildingName} — {selectedRoom.roomNumber}
+            </p>
+          )}
+          <QRCodeSVG value={url} size={Math.min(window.innerWidth, window.innerHeight) * 0.6} />
+          <p className="text-lg text-slate-600">Scan with your phone camera to check in</p>
+          <div className="w-64">
+            <CountdownBar secondsLeft={secondsLeft} />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CountdownBar({ secondsLeft }: { secondsLeft: number }) {
+  return (
+    <div className="mt-3">
+      <div className="h-1 overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full bg-primary transition-[width] duration-1000 ease-linear"
+          style={{ width: `${(secondsLeft / REFRESH_SECONDS) * 100}%` }}
+        />
+      </div>
+      <p className="mt-1 text-center text-xs text-muted-foreground">New code in {secondsLeft}s</p>
     </div>
   )
 }

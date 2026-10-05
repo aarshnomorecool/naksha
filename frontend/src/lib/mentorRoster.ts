@@ -1,9 +1,15 @@
+import { fetchAllRows } from '@/lib/fetchAllRows'
 import { supabase } from '@/lib/supabase'
 
 // Live mentor roster: bands are derived from REAL attendance rows at read
 // time, never from the risk_scores table (which is a one-time heuristic seed
 // until the XGBoost+SHAP model lands — reading it is what caused stale
 // "Needs attention" flags to survive deleted data).
+//
+// Attendance % = days present / class days, where a "class day" is any day in
+// the 14-day window on which at least one check-in happened campus-wide.
+// Dividing by calendar days would count weekends and holidays as absences
+// (a perfect Mon–Fri student would score 10/14 = 71% and get flagged).
 //
 // Band rule (documented, deterministic):
 //   no check-in rows in the 14-day window -> 'no_data' (NOT flagged —
@@ -31,13 +37,14 @@ export interface RosterStudent {
   year: number
   section: string | null
   presentDays: number
+  classDays: number
   attendancePct: number | null
   band: LiveBand
 }
 
-export function bandForAttendance(presentDays: number, hasData: boolean): { pct: number | null; band: LiveBand } {
-  if (!hasData) return { pct: null, band: 'no_data' }
-  const pct = Math.round((100 * presentDays) / ROSTER_WINDOW_DAYS)
+export function bandForAttendance(presentDays: number, classDays: number): { pct: number | null; band: LiveBand } {
+  if (presentDays === 0 || classDays === 0) return { pct: null, band: 'no_data' }
+  const pct = Math.min(100, Math.round((100 * presentDays) / classDays))
   if (pct < 50) return { pct, band: 'needs_attention' }
   if (pct < 75) return { pct, band: 'watching' }
   return { pct, band: 'on_track' }
@@ -68,23 +75,29 @@ export function windowStartIso(): string {
 export async function fetchMentorRoster(): Promise<RosterStudent[]> {
   if (!supabase) return []
   const startIso = windowStartIso()
-  const [studentsRes, attendanceRes] = await Promise.all([
-    supabase
-      .from('students')
-      .select('id, roll_number, full_name, program, year, section')
-      .order('full_name')
-      .returns<StudentRow[]>(),
-    supabase
-      .from('attendance')
-      .select('student_id, session_date')
-      .gte('session_date', startIso)
-      .returns<AttendanceRow[]>(),
+  const client = supabase
+  const [students, attendance] = await Promise.all([
+    fetchAllRows<StudentRow>((from, to) =>
+      client
+        .from('students')
+        .select('id, roll_number, full_name, program, year, section')
+        .order('full_name')
+        .order('id')
+        .range(from, to),
+    ),
+    fetchAllRows<AttendanceRow>((from, to) =>
+      client
+        .from('attendance')
+        .select('student_id, session_date')
+        .gte('session_date', startIso)
+        .order('id')
+        .range(from, to),
+    ),
   ])
-  if (studentsRes.error) throw studentsRes.error
-  if (attendanceRes.error) throw attendanceRes.error
 
+  const classDays = new Set(attendance.map((row) => row.session_date)).size
   const daysByStudent = new Map<string, Set<string>>()
-  for (const row of attendanceRes.data ?? []) {
+  for (const row of attendance) {
     let days = daysByStudent.get(row.student_id)
     if (!days) {
       days = new Set()
@@ -93,9 +106,9 @@ export async function fetchMentorRoster(): Promise<RosterStudent[]> {
     days.add(row.session_date)
   }
 
-  return (studentsRes.data ?? []).map((s) => {
+  return students.map((s) => {
     const days = daysByStudent.get(s.id)
-    const { pct, band } = bandForAttendance(days?.size ?? 0, !!days && days.size > 0)
+    const { pct, band } = bandForAttendance(days?.size ?? 0, classDays)
     return {
       id: s.id,
       roll_number: s.roll_number,
@@ -104,6 +117,7 @@ export async function fetchMentorRoster(): Promise<RosterStudent[]> {
       year: s.year,
       section: s.section,
       presentDays: days?.size ?? 0,
+      classDays,
       attendancePct: pct,
       band,
     }

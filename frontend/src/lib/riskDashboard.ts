@@ -1,3 +1,5 @@
+import { fetchAllRows } from '@/lib/fetchAllRows'
+import { windowStartIso } from '@/lib/mentorRoster'
 import { supabase } from '@/lib/supabase'
 
 // Shape mirrors supabase/migrations/0003_risk_scores.sql — top_factors is a
@@ -74,9 +76,11 @@ export interface CheckIn {
   building_name: string
 }
 
+// 'no_class' = nobody on campus checked in that day (weekend/holiday), so it
+// counts neither for nor against the student.
 export interface AttendanceDay {
   date: string
-  present: boolean
+  status: 'present' | 'absent' | 'no_class'
 }
 
 export interface StudentDetail {
@@ -84,6 +88,8 @@ export interface StudentDetail {
   risk: { risk_score: number; risk_band: RiskBand; top_factors: TopFactor[]; generated_at: string } | null
   checkIns: CheckIn[]
   attendanceTrend: AttendanceDay[]
+  classDays: number
+  presentDays: number
 }
 
 interface AttendanceQueryRow {
@@ -97,7 +103,9 @@ interface AttendanceQueryRow {
 export async function fetchStudentDetail(studentId: string): Promise<StudentDetail | null> {
   if (!supabase) return null
 
-  const [studentRes, riskRes, attendanceRes] = await Promise.all([
+  const client = supabase
+  const startIso = windowStartIso()
+  const [studentRes, riskRes, attendanceRes, studentDays, campusDays] = await Promise.all([
     supabase.from('students').select('id, roll_number, full_name, program, year, section').eq('id', studentId).single<StudentSummary>(),
     supabase.from('risk_scores').select('risk_score, risk_band, top_factors, generated_at').eq('student_id', studentId).maybeSingle(),
     supabase
@@ -107,6 +115,14 @@ export async function fetchStudentDetail(studentId: string): Promise<StudentDeta
       .order('session_date', { ascending: false })
       .limit(30)
       .returns<AttendanceQueryRow[]>(),
+    // The log above is capped at 30 rows (several classes a day = ~a week),
+    // so the 14-day trend needs its own uncapped window queries.
+    fetchAllRows<{ session_date: string }>((from, to) =>
+      client.from('attendance').select('session_date').eq('student_id', studentId).gte('session_date', startIso).order('id').range(from, to),
+    ),
+    fetchAllRows<{ session_date: string }>((from, to) =>
+      client.from('attendance').select('session_date').gte('session_date', startIso).order('id').range(from, to),
+    ),
   ])
 
   if (studentRes.error || !studentRes.data) return null
@@ -121,15 +137,17 @@ export async function fetchStudentDetail(studentId: string): Promise<StudentDeta
     building_name: row.classrooms?.buildings?.name ?? '—',
   }))
 
-  // Last 14 calendar days, present/absent — derived from the same check-in
-  // rows above rather than a second query, since 30 rows already covers it.
-  const presentDates = new Set(checkIns.map((c) => c.session_date))
+  const presentDates = new Set(studentDays.map((r) => r.session_date))
+  const classDates = new Set(campusDays.map((r) => r.session_date))
   const attendanceTrend: AttendanceDay[] = []
   for (let i = 13; i >= 0; i--) {
     const d = new Date()
     d.setDate(d.getDate() - i)
     const iso = d.toISOString().slice(0, 10)
-    attendanceTrend.push({ date: iso, present: presentDates.has(iso) })
+    attendanceTrend.push({
+      date: iso,
+      status: presentDates.has(iso) ? 'present' : classDates.has(iso) ? 'absent' : 'no_class',
+    })
   }
 
   return {
@@ -137,6 +155,8 @@ export async function fetchStudentDetail(studentId: string): Promise<StudentDeta
     risk: riskRes.data ?? null,
     checkIns,
     attendanceTrend,
+    classDays: classDates.size,
+    presentDays: presentDates.size,
   }
 }
 

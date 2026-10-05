@@ -20,8 +20,8 @@ const surfaces = [
   {
     to: '/checkin',
     icon: ScanLine,
-    title: 'Check-in kiosk',
-    description: "Scan a student's badge at the classroom door to record attendance.",
+    title: 'Class check-in',
+    description: 'Show a rotating QR code; students scan it with their phones to record attendance.',
   },
 ]
 
@@ -58,7 +58,7 @@ export function HomePage() {
       <div className="mx-auto mt-20 max-w-xl">
         <p className="mb-3 text-center text-xs font-semibold tracking-[0.15em] text-muted-foreground uppercase">Choose a workspace</p>
         <div className="flex flex-col gap-3">
-          <WorkspaceTab to="/checkin" label="Student" />
+          <WorkspaceTab to="/me" label="Student" />
           <WorkspaceTab to="/dashboard" label="Mentor" />
           <WorkspaceTab to="/map" label="College Live Map" />
         </div>

@@ -1,3 +1,4 @@
+import { fetchAllRows } from '@/lib/fetchAllRows'
 import { supabase } from '@/lib/supabase'
 import type { MapState } from './mapState'
 
@@ -35,12 +36,14 @@ export function subscribeSupabaseData(state: MapState, onChange: () => void): ()
       client.from('parking_spots').select('id, lot_name, lng, lat, occupied').returns<ParkingRow[]>(),
       // Today's real per-room counts — current_occupancy goes stale overnight
       // (the trigger only runs on writes), so prefer the tally when available.
-      client.from('attendance').select('classroom_id').eq('session_date', today),
+      fetchAllRows<{ classroom_id: string }>((from, to) =>
+        client.from('attendance').select('classroom_id').eq('session_date', today).order('id').range(from, to),
+      ).catch(() => [] as { classroom_id: string }[]),
     ])
     if (cancelled) return
 
     const todayByRoom = new Map<string, number>()
-    for (const row of (todayRows.data as { classroom_id: string }[] | null) ?? []) {
+    for (const row of todayRows) {
       todayByRoom.set(row.classroom_id, (todayByRoom.get(row.classroom_id) ?? 0) + 1)
     }
 

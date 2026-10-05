@@ -1,3 +1,4 @@
+import { fetchAllRows } from '@/lib/fetchAllRows'
 import { supabase } from '@/lib/supabase'
 
 // Live "today" feed for the mentor dashboard. Everything here reads the real
@@ -53,6 +54,7 @@ interface TodayCountRow {
 export async function fetchTodaySummary(): Promise<TodaySummary> {
   if (!supabase) return { total: 0, roomsActive: 0, rooms: [], recent: [] }
   const today = new Date().toISOString().slice(0, 10)
+  const client = supabase
 
   const [attendanceRes, roomsRes, countsRes] = await Promise.all([
     supabase
@@ -69,15 +71,12 @@ export async function fetchTodaySummary(): Promise<TodaySummary> {
       .returns<RoomRow[]>(),
     // Per-room today's counts from REAL rows — current_occupancy goes stale
     // overnight (the trigger only runs on writes), so never trust it here.
-    supabase
-      .from('attendance')
-      .select('classroom_id')
-      .eq('session_date', today)
-      .returns<TodayCountRow[]>(),
+    fetchAllRows<TodayCountRow>((from, to) =>
+      client.from('attendance').select('classroom_id').eq('session_date', today).order('id').range(from, to),
+    ),
   ])
   if (attendanceRes.error) throw attendanceRes.error
   if (roomsRes.error) throw roomsRes.error
-  if (countsRes.error) throw countsRes.error
 
   const recent: TodayCheckIn[] = (attendanceRes.data ?? []).map((row) => ({
     id: row.id,
@@ -90,7 +89,7 @@ export async function fetchTodaySummary(): Promise<TodaySummary> {
   }))
 
   const todayByRoom = new Map<string, number>()
-  for (const row of countsRes.data ?? []) {
+  for (const row of countsRes) {
     todayByRoom.set(row.classroom_id, (todayByRoom.get(row.classroom_id) ?? 0) + 1)
   }
 
